@@ -61,6 +61,7 @@ local	UAPACHE_FLY_DIVE	= 7		-- Divebomb - only done when dead
 local	UAPACHE_FLY_FOLLOW	= 8		-- Following a target
 
 ENT.bNewPath = false 
+ENT.m_bChooseFarthestPoint = false 
 ENT.m_flGoalRollDmg = 0 
 ENT.m_fHeadYaw = 0 
 ENT.m_fMaxYawSpeed = 0 -- Max turning speed 
@@ -409,13 +410,13 @@ function ENT:StartTouch(ent)
 end 
 
 function ENT:EndTouch(ent) self:SetLocalVelocity(self.tempVelocity) end 
-function ENT:GetEnemyVehicle() return NULL end 
+
 function ENT:GetCrashPoint() return NULL end 
 
 function ENT:NPC_SetLeadingDistance(flDist) self.flLeadDistance = flDist or 0 end 
 function ENT:NPC_GetLeadingDistance(flDist) return self.flLeadDistance or 0 end 
-function ENT:SetDesiredPosition(m_vecDesiredPosition) self.m_vecDesiredPosition = m_vecDesiredPosition or self:GetPos() end 
-function ENT:GetDesiredPosition(flDist) return self.m_vecDesiredPosition or self:GetCurWaypointPos() end 
+function ENT:NPC_SetDesiredPosition(m_vecDesiredPosition) self.m_vecDesiredPosition = m_vecDesiredPosition or self:GetPos() end 
+function ENT:NPC_GetDesiredPosition(flDist) return self.m_vecDesiredPosition or self:GetCurWaypointPos() end 
 
 function ENT:UApache_Think() 
 	if !IsValid(self) then return end
@@ -462,6 +463,13 @@ function ENT:UApache_Think()
 			self:UApache_RangeAttack() 
 		end 
 	end) 	
+end 
+
+function ENT:NPC_GetEnemyVehicle(enemy) 
+	enemy = IsValid(enemy) and enemy or self:GetEnemy() 
+	if !IsValid(enemy) then return NULL end 
+	local parentEnt = IsValid(enemy:GetParent()) and enemy:GetParent() or enemy.GetVehicle and IsValid(enemy:GetVehicle()) and enemy:GetVehicle() or NULL 
+	return parentEnt
 end 
 
 function ENT:UApache_RangeAttack() 
@@ -613,10 +621,10 @@ function ENT:UApache_SlowDodge()
 	local phys=self:GetPhysicsObject()
 	if self.dodgeavailable == 1 and phys:IsValid() then
 		if self.dodgeright == 1 then
-			phys:SetVelocity(self:GetVelocity()+self:GetRight()*5)
+			self:SetVelocity(self:GetVelocity()+self:GetRight()*5)
 			-- print("dodging to right")
 			elseif self.dodgeleft == 1 then
-			phys:SetVelocity(self:GetVelocity()+self:GetRight()*-5)
+			self:SetVelocity(self:GetVelocity()+self:GetRight()*-5)
 			-- print("dodging to left")
 		end
 	end
@@ -707,11 +715,11 @@ function ENT:UApache_IsClear(vec) -- Purpose: Initiates a quick trace check if g
 end
 
 function ENT:UApache_DodgeLeft(phys)
-	phys:SetVelocity(Vector(self:GetRight().x*-500,self:GetRight().y*-500,self:GetRight().z))
+	self:SetVelocity(Vector(self:GetRight().x*-500,self:GetRight().y*-500,self:GetRight().z))
 end	
 
 function ENT:UApache_DodgeRight(phys)
-	phys:SetVelocity(Vector(self:GetRight().x*500,self:GetRight().y*500,self:GetRight().z)) -- Cscanner rolls 90 degrees when scanner's position is above than desired scan position. Applying Z force causes dumb movement when that's case. So I don't apply. 
+	self:SetVelocity(Vector(self:GetRight().x*500,self:GetRight().y*500,self:GetRight().z)) -- Cscanner rolls 90 degrees when scanner's position is above than desired scan position. Applying Z force causes dumb movement when that's case. So I don't apply. 
 end	
 
 function ENT:NPC_FireProjectile_CopyFrom(proj,attachment) -- avoiding calling same calculations, copies from properties of another proj 
@@ -784,12 +792,12 @@ function ENT:AdjustAim_uscript(proj, projspeed) -- currently we are using this s
 end	
 
 function ENT:UpdatePerpPathDistance(flMaxPathOffset) 
-  if !self.bLeading and self:GetDesiredPosition() == Vector(0,0,0)  then 
+  if !self.bLeading and self:NPC_GetDesiredPosition() == Vector(0,0,0)  then 
         self.m_flCurrPathOffset = 0 
         return 0 
     end 
 
-    local flNewPathOffset = self:GetDesiredPosition():Distance(self:GetPos()) 
+    local flNewPathOffset = self:NPC_GetDesiredPosition():Distance(self:GetPos()) 
 
     -- Make bomb dropping more interesting
     if self:NPC_ShouldDropBombs() then 
@@ -840,15 +848,23 @@ function ENT:NPC_TargetPathAcrossDirection()
 	return self:NPC_TargetPathDirection():Cross(Vector(0,0,1)) 
 end 
 
-function ENT:GetMaxSpeedAndAccel() 
+function ENT:NPC_GetMaxSpeedAndAccel() 
 	local pAccelRate = HELICOPTER_ACCEL_RATE or 10 -- if enemy is in vehicle, *pAccelRate *= 9.0f; 
 	local pMaxSpeed = HELICOPTER_SPEED 
+	local target = self:NPC_GetGoalTarget() 
+	if IsValid(target) then 
+		pTargetSpeed = target:GetInternalVariable("speed") 
+		if pTargetSpeed != 0 then 
+			pMaxSpeed = pTargetSpeed 
+		end 
+	end 
+	
 	return pMaxSpeed, pAccelRate 
 end 
 
 function ENT:NPC_MaxDistanceFromCurrentPath() 
-	if !self.bLeading or self:GetCurWaypointPos() == Vector(0,0,0) then return 0 end 
-	local curPath = self:GetDesiredPosition() 
+	local curPath = self:NPC_GetDesiredPosition() 
+	if !self.bLeading or curPath == Vector(0,0,0) then return 0 end 
 	local vecTemp, t = CalcClosestPointOnLine(self:GetPos(),self.m_vecSegmentStartPoint,curPath) 
 	t = math.Clamp(t,0,1) 
 	local flRadius = (1.0 - t) * self:BoundingRadius() + t * self:BoundingRadius() 
@@ -882,7 +898,7 @@ function ENT:NPC_ComputeActualTargetPosition(flSpeed, flTime, flPerpDist, bApply
     -- end 
 
     -- Otherwise, compute movement towards the desired position
-    local pDest = self:GetDesiredPosition() - self:GetPos() 
+    local pDest = self:NPC_GetDesiredPosition() - self:GetPos() 
 	
     local flDistToDesired = pDest:Length() 
     if flDistToDesired > flSpeed * flTime then 
@@ -934,7 +950,7 @@ function ENT:NPC_Flight(flInterval)
         flMinDistFromSegment = math.abs(flPerpDist) + 100
         flMaxDistFromSegment = math.abs(flPerpDist) + 200
 
-        if flMaxPathOffset ~= 0 then
+        if flMaxPathOffset != 0 then
             if flMaxDistFromSegment > flMaxPathOffset - 100 then
                 flMaxDistFromSegment = flMaxPathOffset - 100
             end
@@ -945,7 +961,7 @@ function ENT:NPC_Flight(flInterval)
     end
 
     -- Get maximum speed and acceleration
-    local maxSpeed, accelRate = self:GetMaxSpeedAndAccel() 
+    local maxSpeed, accelRate = self:NPC_GetMaxSpeedAndAccel() 
 
     -- Get current velocity and compute distance
     local flCurrentSpeed = self:GetVelocity():Length() 
@@ -964,8 +980,9 @@ function ENT:NPC_Flight(flInterval)
 
     -- Update facing direction and compute velocity
     self:UpdateFacingDirection(vecTargetPosition) 
-    local accel = self:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment, flInterval) 
-    self:ComputeAngularVelocity(accel, self.m_vecDesiredFaceDir) 
+    local accel = self:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment, flInterval) 
+	self:SetVelocity(accel) 
+    local angVel = self:ComputeAngularVelocity(accel, self.m_vecDesiredFaceDir, flInterval) 
 	self:UpdateDesiredPosition() 
 end 
 
@@ -1006,8 +1023,13 @@ function ENT:NPC_GetPaths(pathTrack, visited)
     return visited 
 end 
 
+function ENT:NPC_GetGoalTarget() 
+	local m_hGoalEnt = self:GetInternalVariable("m_hGoalEnt") 
+	return IsValid(self:GetGoalTarget()) and self:GetGoalTarget() or IsValid(m_hGoalEnt) and m_hGoalEnt or NULL 
+end 
+
 function ENT:NPC_GetNextPath(pathTrack) 
-	pathTrack = IsValid(pathTrack) and pathTrack or self:GetGoalTarget() 
+	pathTrack = IsValid(pathTrack) and pathTrack or self:NPC_GetGoalTarget() 
 	local nextTarget = pathTrack:GetKeyValues()["target"] 
 	 if #nextTarget > 0 then 
         -- Find the next path_track entity by name 
@@ -1020,7 +1042,7 @@ function ENT:NPC_GetNextPath(pathTrack)
 end 
 
 function ENT:NPC_GetPreviousPath(pathTrack) 
-	pathTrack = IsValid(pathTrack) and pathTrack or self:GetGoalTarget() 
+	pathTrack = IsValid(pathTrack) and pathTrack or self:NPC_GetGoalTarget() 
 	for k,v in pairs(ents.FindByClass(pathTrack:GetClass())) do 
 		local theirTarget = v:GetKeyValues()["target"] 
 		if theirTarget == pathTrack:GetName() then return v end 
@@ -1029,7 +1051,7 @@ function ENT:NPC_GetPreviousPath(pathTrack)
 end 
 
 function ENT:NPC_BestPointOnPath(pPath, targetPos, flAvoidRadius, visible, bFarthestPoint)
-	if !IsValid(pPath) then pPath = self:GetGoalTarget() end
+	if !IsValid(pPath) then pPath = self:NPC_GetGoalTarget() end
 	if !flAvoidRadius then flAvoidRadius = 0 end
 
 	if !IsValid(pPath) then return NULL end
@@ -1047,8 +1069,7 @@ function ENT:NPC_BestPointOnPath(pPath, targetPos, flAvoidRadius, visible, bFart
 	local pNearestPath = NULL
 
 	for k, v in pairs(self:NPC_GetPaths(pPath)) do
-		local flPathDist = (k:GetPos() - targetPos):LengthSqr()
-		print(k, flPathDist)
+		local flPathDist = (k:GetPos() - targetPos):LengthSqr() 
 
 		-- Update logic for finding the nearest point
 		if bFarthestPoint then
@@ -1165,7 +1186,7 @@ function ENT:NPC_ComputeDistanceAlongPathToPoint(pStartTrack, pDestTrack, vecDes
         end
 
         -- Calculate the 2D distance between the current point and the test path's position
-        flTotalDist = flTotalDist + (bMovingForward and 1 or -1) * vecPoint:DistTo(pTestPath:GetPos())
+        flTotalDist = flTotalDist + (bMovingForward and 1 or -1) * vecPoint:Distance(pTestPath:GetPos())
         vecPoint = pTestPath:GetPos()
 
         -- Determine the next path based on the direction of movement
@@ -1186,6 +1207,106 @@ function ENT:NPC_ComputeDistanceAlongPathToPoint(pStartTrack, pDestTrack, vecDes
     return flTotalDist
 end 
 
+function ENT:NPC_IsOnSameTrack(pPath1, pPath2) 
+	if !IsValid(pPath1) or !IsValid(pPath2) then return end 
+	for k,v in pairs(pPath1) do 
+		if k == pPath2 then return true end 
+	end 
+	return false 
+end 
+
+function ENT:NPC_FindClosestPointOnPath(pPath, targetPos) 
+    -- If a path is not provided, use the destination path target
+    pPath = IsValid(pPath) and pPath or self:NPC_GetGoalTarget() 
+	if !IsValid(pPath) then return NULL end 
+
+    -- Initialize nearest path and distances
+    local pNearestPath = NULL
+    local flNearestDist2D = 999999999
+    local flNearestDist = 999999999
+    local flPathDist, flPathDist2D = 0,0 
+
+    local vecNearestPoint = Vector(0, 0, 0)
+    local vecNearestPathSegment = Vector(0, 0, 0)
+
+    -- Iterate twice (once for previous paths and once for next paths)
+    for i = 0, 1 do
+        local pTravPath = pPath 
+        local pNextPath = NULL 
+
+        -- Iterate through paths using self:NPC_GetPaths
+        for k, _ in pairs(self:NPC_GetPaths(pTravPath)) do
+            pNextPath = (i == 0) and self:NPC_GetPreviousPath(pTravPath) or self:NPC_GetNextPath(pTravPath)
+
+            -- Circular loop check: If the path has been visited, break the loop
+            -- if self:NPC_HasBeenVisited(pTravPath) then
+                -- break
+            -- end
+            -- Mark the current path as visited
+            -- self:NPC_VisitPath(pTravPath)
+
+            -- Skip alternative paths in leading behavior
+            if pTravPath:GetInternalVariable("m_paltpath") then
+                print(self,": Alternative paths in path_track not allowed when using the leading behavior!") 
+            end
+
+            -- Make sure there's a valid next path for line segment calculation
+            if !IsValid(pNextPath) then break end
+
+            -- Calculate the closest point on the line segment between current and next path
+            local vecClosest = CalcClosestPointOnLineSegment(targetPos, pTravPath:GetPos(), pNextPath:GetPos())
+
+            -- Calculate the 2D distance to the target position
+            flPathDist2D = vecClosest:DistToSqr(targetPos)
+
+            -- Update the nearest path if the current one is closer
+            if flPathDist2D <= flNearestDist2D then
+                flPathDist = (vecClosest.z - targetPos.z) ^ 2 + flPathDist2D
+                if flPathDist2D < flNearestDist2D or flPathDist < flNearestDist then
+                    pNearestPath = (i == 0) and pTravPath or pNextPath
+                    flNearestDist2D = flPathDist2D
+                    flNearestDist = flPathDist
+                    vecNearestPoint = vecClosest
+                    vecNearestPathSegment = pNextPath:GetPos() - pTravPath:GetPos()
+                    if i == 0 then
+                        vecNearestPathSegment = vecNearestPathSegment * -1
+                    end
+                end
+            end
+        end
+    end
+
+    -- Normalize the nearest path segment direction
+    vecNearestPathSegment = vecNearestPathSegment:GetNormalized() 
+
+    -- Calculate the perpendicular distance from the path
+    local pDistanceFromPath = self:NPC_ComputePerpDistanceFromPath(vecNearestPoint, vecNearestPathSegment, targetPos)
+
+    -- Assign the closest point and path direction to the output parameters
+    local pVecClosestPoint = vecNearestPoint 
+
+    return pNearestPath, pVecClosestPoint, vecNearestPathSegment, pDistanceFromPath 
+end 
+
+function ENT:NPC_ComputePerpDistanceFromPath(vecPointOnPath, vecPathDir, vecPointOffPath) 
+    -- Create a vector that is perpendicular to the path direction (cross product with the Z-axis) 
+    local vecAcross = vecPathDir:Cross(Vector(0, 0, 1)) 
+
+    -- Calculate the vector from the point on the path to the point off the path 
+    local vecDelta = vecPointOffPath - vecPointOnPath 
+
+    -- Project vecDelta onto the perpendicular direction 
+    vecDelta = vecDelta - vecPathDir * vecPathDir:Dot(vecDelta) 
+
+    -- Calculate the 2D distance (ignoring Z) from the path 
+    local flDistanceFromPath = vecDelta:Length2D() 
+
+    -- If the point is on the left side, make the distance negative 
+    if vecAcross:Dot(vecDelta) < 0 then flDistanceFromPath = flDistanceFromPath * -1 end 
+
+    return flDistanceFromPath 
+end 
+
 function ENT:NPC_ComputePathDirection(pPath) 
 	local pVecPathDir = Vector(0,0,0) 
 	local prevPath, nextPath = self:NPC_GetPreviousPath(pPath), self:NPC_GetNextPath(pPath) 
@@ -1200,17 +1321,17 @@ function ENT:NPC_ComputePathDirection(pPath)
 end 
 
 function ENT:NPC_ClosestPointToCurrentPath() 
-	-- self.m_vecSegmentStartPoint = self:GetDesiredPosition() 
+	-- self.m_vecSegmentStartPoint = self:NPC_GetDesiredPosition() 
 	if self:GetCurWaypointPos() == Vector(0,0,0) then return Vector(0,0,0) end 
 	-- local vClosest, t = CalcClosestPointOnLine(self:GetPos(), self.m_vecSegmentStartPoint, self:GetCurWaypointPos()) 
-	local vClosest, t = CalcClosestPointOnLine(self:GetPos(), self.m_vecSegmentStartPoint, self:GetDesiredPosition()) 
+	local vClosest, t = CalcClosestPointOnLine(self:GetPos(), self.m_vecSegmentStartPoint, self:NPC_GetDesiredPosition()) 
 	return vClosest, t 
 end 
 
-local function CalcClosestPointOnLineSegment( P, vLineA, vLineB, vClosest, outT ) 
+local function CalcClosestPointOnLineSegment( P, vLineA, vLineB ) 
 	local t, vDir = CalcClosestPointToLineT(P, vLineA, vLineB) 
 	t = math.Clamp(t,0,1) 
-	vClosest = vLineA + vDir * t -- Closest point on the line 
+	local vClosest = vLineA + vDir * t -- Closest point on the line 
 	return vClosest, t 
 end 
 
@@ -1219,13 +1340,13 @@ function ENT:ApplySidewaysDrag(vecRight)
 	vecNewVelocity.x = vecNewVelocity.x * 1.0 - math.abs( vecRight.x ) * 0.05 
 	vecNewVelocity.y = vecNewVelocity.y * 1.0 - math.abs( vecRight.y ) * 0.05 
 	vecNewVelocity.z = vecNewVelocity.z * 1.0 - math.abs( vecRight.z ) * 0.05 
-	self:SetVelocity( vecNewVelocity ) 
+	self:SetLocalVelocity( vecNewVelocity ) 
 end 
 
 function ENT:ApplyGeneralDrag() 
 	local vecNewVelocity = self:GetAbsVelocity() 
 	vecNewVelocity = vecNewVelocity * 0.995 
-	self:SetVelocity( vecNewVelocity ) 
+	self:SetLocalVelocity( vecNewVelocity ) 
 end 
 
 local skiptasks = { [62] = true, [63] = true, [64] = true, [66] = true, [67] = true, [69] = true, [70] = true, [71] = true, [72] = true, [120] = true } 
@@ -1331,11 +1452,11 @@ function ENT:Innate_Range_Attack1()
 end 
 
 --[[ 
-function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment) 
+function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment) 
 	local vecAdj = Angle( 5.0, 0, 0 ) 
 	local localAngles = self:GetLocalAngles() 
 	local angVel = self:GetLocalAngularVelocity() 
-	local maxSpeed, accelRate = self:GetMaxSpeedAndAccel() 
+	local maxSpeed, accelRate = self:NPC_GetMaxSpeedAndAccel() 
 
 	-- Compute the adjusted angles
 	local adjustedAngles = localAngles + angVel * 2 + vecAdj 
@@ -1375,8 +1496,8 @@ function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFro
 	local flSpeed = self:GetAbsVelocity():Length() 
 	local flDir = Vector( forward.x, forward.y, 0 ):Dot(Vector( self:GetAbsVelocity().x, self:GetAbsVelocity().y, 0 ) ) 
 	if (flDir < 0 ) then flSpeed = -flSpeed end 
-	local flDist = (self:GetDesiredPosition() - vecEst):Dot(forward) 
-	local flSlip = -((self:GetDesiredPosition() - vecEst):Dot(right)) 
+	local flDist = (self:NPC_GetDesiredPosition() - vecEst):Dot(forward) 
+	local flSlip = -((self:NPC_GetDesiredPosition() - vecEst):Dot(right)) 
 	
 	if flSlip > 0 then
 		if self:GetLocalAngles().r > -30 and angVel.z > -15 then
@@ -1398,10 +1519,10 @@ function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFro
 	local FORCE_POSDELTA = 12	
 	local FORCE_NEGDELTA = 8 
 	
-	if self.m_flForce < MAX_FORCE and vecEst.z < self:GetDesiredPosition().z then 
+	if self.m_flForce < MAX_FORCE and vecEst.z < self:NPC_GetDesiredPosition().z then 
 		self.m_flForce = self.m_flForce + FORCE_POSDELTA 
 	elseif self.m_flForce > 30 then 
-		if (vecEst.z > self:GetDesiredPosition().z) then 
+		if (vecEst.z > self:NPC_GetDesiredPosition().z) then 
 			self.m_flForce = self.m_flForce - FORCE_NEGDELTA 
 		end 
 	end 
@@ -1428,22 +1549,24 @@ end
 --]] 
 
 
-function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment) 
+function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment, flInterval) 
+	local HELICOPTER_DT = flInterval 
+	
 	local deltaPos, pVecAccel = (vecTargetPosition - self:GetPos()), Vector(0,0,0)  
-	pVecAccel = 2 * (deltaPos - self:GetVelocity()) / 1 
+	pVecAccel = 2 * (deltaPos - self:GetAbsVelocity()) 
 	pVecAccel.z = pVecAccel.z + HELICOPTER_GRAVITY -- HELICOPTER_GRAVITY 
 	local flDistFromPath = 0 
 	local vecPoint, vecDelta = Vector(0,0,0), Vector(0,0,0) 
 	
 	if flMaxDistFromSegment != 0 then 
-		vecPoint, t = self:ClosestPointToCurrentPath( ) 
+		vecPoint, t = self:NPC_ClosestPointToCurrentPath( ) 
+		print("vecPoint:",vecPoint) 
 		-- debugoverlay.Line(self:GetPos(),vecPoint,0.3) 
 		if flAdditionalHeight != 0 then 
 			local vecEndPoint, vecClosest = Vector(0,0,0), Vector(0,0,0) 
 			vecEndPoint = vecPoint 
 			vecEndPoint.z = vecEndPoint.z + flAdditionalHeight 
-			vecClosest = CalcClosestPointOnLineSegment( self:GetPos(), vecPoint, vecEndPoint, vecClosest ) 
-			vecPoint = vecClosest 
+			vecPoint = CalcClosestPointOnLineSegment( self:GetPos(), vecPoint, vecEndPoint ) 
 		end 
 		
 		vecDelta = vecPoint - self:GetPos() 
@@ -1479,7 +1602,7 @@ function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFro
 	end 
 	local forward, right, up = self:GetForward(), self:GetRight(), self:GetUp() 
 	
-	local flForceBlend = self:GetEnemyVehicle() and HELICOPTER_FORCE_BLEND_VEHICLE or HELICOPTER_FORCE_BLEND 
+	local flForceBlend = IsValid(self:NPC_GetEnemyVehicle()) and HELICOPTER_FORCE_BLEND_VEHICLE or HELICOPTER_FORCE_BLEND 
 	-- First, attenuate the current force 
 	self.m_flForce = self.m_flForce * flForceBlend 
 	
@@ -1490,21 +1613,42 @@ function ENT:ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFro
 	local vecImpulse = up * self.m_flForce 
 	
 	-- NOTE: These have to be done *before* the additional path distance drag forces are applied below
-	-- self:ApplySidewaysDrag( right ) 
-	-- self:ApplyGeneralDrag() 
-	-- TO BE CONTINUED 
-	vecImpulse.z = vecImpulse.z -HELICOPTER_GRAVITY * HELICOPTER_DT 
+	self:ApplySidewaysDrag( right ) 
+	self:ApplyGeneralDrag() 
+	if self:GetInternalVariable("m_lifeState") != 1 or (self:GetInternalVariable("m_lifeState") == 1 and IsValid(self:GetCrashPoint())) then 
+        vecImpulse.z = vecImpulse.z - HELICOPTER_GRAVITY * HELICOPTER_DT 
+        if flMinDistFromSegment != 0 and (flDistFromPath > flMinDistFromSegment) then 
+            local vecVelDir = self:GetAbsVelocity()
+            
+            -- Dot product between impulse and direction vector
+			-- vecDelta = Vector(0,50,0) 
+            local flDot = vecImpulse:Dot(vecDelta)
+            if flDot < 0 then
+                vecImpulse = vecImpulse + (-flDot * 0.1) * vecDelta
+            end
+            
+            -- Adjust for current velocity along path direction
+            flDot = vecVelDir:Dot(vecDelta)
+			
+            if flDot < 0 then
+                vecImpulse = vecImpulse + (-flDot * 0.1) * vecDelta
+            end
+        end
+    else
+		vecImpulse.z = vecImpulse.z -HELICOPTER_GRAVITY * HELICOPTER_DT 
+	end 
 	
 	vecImpulse.x = vecImpulse.x + pVecAccel.x * HELICOPTER_DT 
 	vecImpulse.y = vecImpulse.y + pVecAccel.y * HELICOPTER_DT 
 	vecImpulse.x = vecImpulse.x * 0.1 
 	vecImpulse.y = vecImpulse.y * 0.1 
-	self:SetVelocity(vecImpulse) 
 	return vecImpulse 
 end 
 
+-- vecImpulse.x = vecImpulse.x + pVecAccel.x * HELICOPTER_DT 
+-- vecImpulse.y = vecImpulse.y + pVecAccel.y * HELICOPTER_DT 
 
-function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection ) 
+function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection, flInterval ) 
 	local goalAngAccel = Angle() 
 	local m_lifeState = self:GetInternalVariable("m_lifeState") 
 	if m_lifeState != 1 or (m_lifeState == 1 and IsValid(self:GetCrashPoint())) then 
@@ -1539,7 +1683,7 @@ function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection )
 	
 	-- limit angular accel changes to similate mechanical response times
 	local angAccelAccel = Angle() 
-	local dt = 0.1 
+	local dt = flInterval 
 	angAccelAccel.x = (goalAngAccel.x - self.m_vecAngAcceleration.x) / dt 
 	angAccelAccel.y = (goalAngAccel.y - self.m_vecAngAcceleration.y) / dt 
 	angAccelAccel.z = (goalAngAccel.z - self.m_vecAngAcceleration.z) / dt 
@@ -1567,20 +1711,21 @@ function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection )
 	local flAmt = math.Clamp( angVel.y, -30, 30 ) 
 	local flRudderPose = math.Remap( flAmt, -30, 30, 45, -45 ) 
 	-- self:SetPoseParameter( "rudder", flRudderPose ) 
+	return angVel 
 end 
 
 function ENT:UpdateTrackNavigation() 
 	if !self.bLeading then 
 		if self:GetCurWaypointPos() == Vector(0,0,0) then return end 
-		self:UpdateTargetPosition() 
-		self:UpdateCurrentTarget() 
+		self:NPC_UpdateTargetPosition() 
+		self:NPC_UpdateCurrentTarget() 
 	else 
-		-- self:UpdateTargetPositionLeading() 
-		-- self:UpdateCurrentTargetLeading() 
+		self:NPC_UpdateTargetPositionLeading() 
+		self:NPC_UpdateCurrentTargetLeading() 
 	end 
 end 
 
-function ENT:UpdateTargetPosition() 
+function ENT:NPC_UpdateTargetPosition() 
 	-- Don't update our target if we're being told to go somewhere
 	if ( self.m_bForcedMove and !self.m_bPatrolBreakable ) then return end 
 
@@ -1602,6 +1747,11 @@ function ENT:UpdateTargetPosition()
 
 	-- Find the best position to be on our path
 	-- self.m_pDestPathTarget = 
+	local pDest = self:NPC_BestPointOnPath(self:NPC_GetGoalTarget(), self.NPC_GetDesiredPosition(), self.m_flAvoidDistance, true, self.m_bChooseFarthestPoint) 
+	if !IsValid(pDest) then return end 
+	if pDest:GetPos() != self:NPC_GetDesiredPosition() then 
+		
+	end 
 	--[[ 
 	CPathTrack *pDest = BestPointOnPath( m_pCurrentPathTarget, targetPos, m_flAvoidDistance, true, m_bChooseFarthestPoint );
 
@@ -1637,10 +1787,10 @@ function ENT:UpdateTargetPosition()
 	self.m_flEnemyPathUpdateTime	= CurTime() + 1 
 end 
 
-function ENT:UpdateCurrentTarget() 
+function ENT:NPC_UpdateCurrentTarget() 
 	-- Find the point along the line that we're closest to.
 	local vecTarget = self:GetCurWaypointPos() -- const Vector &vecTarget = m_pCurrentPathTarget->GetAbsOrigin();
-	local vecPoint, t = self:ClosestPointToCurrentPath() -- float t = ClosestPointToCurrentPath( &vecPoint );
+	local vecPoint, t = self:NPC_ClosestPointToCurrentPath() -- float t = ClosestPointToCurrentPath( &vecPoint );
 	if (t < 1) and ( vecPoint:DistToSqr( vecTarget ) > self.m_flTargetTolerance * self.m_flTargetTolerance ) then 
 		goto visualizeDebugInfo 
 	end 
@@ -1699,7 +1849,7 @@ end
 function ENT:UpdateFacingDirection() 
 	self.m_vecTargetPosition = IsValid(self:GetEnemy()) and self:GetEnemy():EyePos() or self.m_vecTargetPosition 
 	local targetDir = (self.m_vecTargetPosition - self:GetPos()):GetNormalized() 
-	local desiredDir = (self:GetDesiredPosition() - self:GetPos()):GetNormalized() 
+	local desiredDir = (self:NPC_GetDesiredPosition() - self:GetPos()):GetNormalized() 
 	if !self:IsCrashing() and self:GetInternalVariable("m_flLastEnemyTime") > -5 then 
 		self.m_vecDesiredFaceDir = targetDir 
 	else 
@@ -1717,9 +1867,9 @@ function ENT:UpdateDesiredPosition()
 			self.m_vecSegmentStartSplinePoint = self:GetCurWaypointPos() 
 		end 
 	
-		self:SetDesiredPosition(curwaypoint) 
+		self:NPC_SetDesiredPosition(curwaypoint) 
 		
-		local vecPoint, t = self:ClosestPointToCurrentPath() -- float t = ClosestPointToCurrentPath( &vecPoint );
+		local vecPoint, t = self:NPC_ClosestPointToCurrentPath() -- float t = ClosestPointToCurrentPath( &vecPoint );
 		-- if (t < 1) and ( vecPoint:DistToSqr( curwaypoint ) > self.m_flTargetTolerance * self.m_flTargetTolerance ) then 
 			-- print("distance is higher") 
 			-- print("t:",t) 
@@ -1943,7 +2093,7 @@ function ENT:UApache_OverrideMove( flInterval )
 	end 
 end 
 
-function ENT:UApache_MoveExecute_Alive( flInterval ) -- flInteral means the last time you moved. m_flTimeLastMovement 
+function ENT:UApache_MoveExecute_Alive( flInterval ) -- flInterval means the last time you moved. m_flTimeLastMovement 
 	local flNoiseScale = 3 
 	print("called MoveExecute_Alive") 
 	if self.m_nFlyMode != UAPACHE_FLY_DIVE then 
