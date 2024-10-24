@@ -413,11 +413,6 @@ function ENT:EndTouch(ent) self:SetLocalVelocity(self.tempVelocity) end
 
 function ENT:GetCrashPoint() return NULL end 
 
-function ENT:NPC_SetLeadingDistance(flDist) self.flLeadDistance = flDist or 0 end 
-function ENT:NPC_GetLeadingDistance(flDist) return self.flLeadDistance or 0 end 
-function ENT:NPC_SetDesiredPosition(m_vecDesiredPosition) self.m_vecDesiredPosition = m_vecDesiredPosition or self:GetPos() end 
-function ENT:NPC_GetDesiredPosition(flDist) return self.m_vecDesiredPosition or self:GetCurWaypointPos() end 
-
 function ENT:UApache_Think() 
 	if !IsValid(self) then return end
 	-- UApache_CheckifClear(self)
@@ -470,6 +465,12 @@ function ENT:NPC_GetEnemyVehicle(enemy)
 	if !IsValid(enemy) then return NULL end 
 	local parentEnt = IsValid(enemy:GetParent()) and enemy:GetParent() or enemy.GetVehicle and IsValid(enemy:GetVehicle()) and enemy:GetVehicle() or NULL 
 	return parentEnt
+end 
+
+function ENT:NPC_AdjustForMovementDirection(pPath) 
+	local prevPath = self:NPC_GetPreviousPath(pPath) 
+	if !self.m_bMovingForward and IsValid(prevPath) then return prevPath end 
+	return pPath 
 end 
 
 function ENT:UApache_RangeAttack() 
@@ -858,6 +859,8 @@ function ENT:NPC_GetMaxSpeedAndAccel()
 			pMaxSpeed = pTargetSpeed 
 		end 
 	end 
+	local moveWait = self:GetInternalVariable("m_flMoveWaitFinished") 
+	if moveWait > 0 then pMaxSpeed = 0 end 
 	
 	return pMaxSpeed, pAccelRate 
 end 
@@ -892,9 +895,9 @@ function ENT:NPC_ComputeActualTargetPosition(flSpeed, flTime, flPerpDist, bApply
 
     -- If leading, has an enemy, and is on a path track, compute the point along the path 
     -- if self.bLeading and self:GetEnemy() and self:IsGoalActive() then 
-        -- self:ComputePointAlongCurrentPath(flSpeed * flTime, flPerpDist, pDest) 
+        -- pDest = self:NPC_ComputePointAlongCurrentPath(flSpeed * flTime, flPerpDist) 
         -- pDest:Add(self.m_vecRandomOffset) 
-        -- return 
+        -- return pDest 
     -- end 
 
     -- Otherwise, compute movement towards the desired position
@@ -924,15 +927,94 @@ function ENT:NPC_ComputeActualTargetPosition(flSpeed, flTime, flPerpDist, bApply
 	return pDest 
 end 
 
-function ENT:ComputePointAlongCurrentPath(flDistance, flPerpDist) 
-	local vecStartPoint = self:ClosestPointToCurrentPath( ) 
-	local pTarget = vecStartPoint 
-	if flDistance != 0 then 
-		local vecPrevPoint = vecStartPoint 
+function ENT:NPC_ComputePointFromPerpDistance(vecPointOnPath, vecPathDir, flPerpDist) 
+	local vecAcross = vecPathDir:Cross(Vector(0,0,1)) 
+	return vecPointOnPath + (flPerpDist*vecAcross)
+end 
+
+function ENT:NPC_ComputeDistanceToLeadingPosition() 
+	return self:NPC_ComputeDistanceAlongPathToPoint( self:NPC_GetGoalTarget(), self.m_pDestPathTarget, self:NPC_GetDesiredPosition(), self.m_bMovingForward )
+end 
+
+function ENT:NPC_ComputePointAlongCurrentPath(flDistance, flPerpDist) 
+    local vecPathDir = Vector() 
+    local vecStartPoint = Vector() 
+    
+    -- Find the closest point to the current path
+    self:NPC_ClosestPointToCurrentPath(vecStartPoint)
+    local pTarget = vecStartPoint 
+    
+    if flDistance != 0 then
+        local vecPrevPoint = vecStartPoint
+        local pTravPath = self:NPC_GetGoalTarget()
+        local pAdjustedDest = self:NPC_AdjustForMovementDirection(self:NPC_GetGoalTarget()) 
+
+        while IsValid(pTravPath) do
+            if pTravPath == pAdjustedDest then
+                -- Compute direction of the path
+                local vecPathDir = self:NPC_ComputePathDirection(pTravPath) 
+                
+                local flPathDist = pTarget:DistTo(self:NPC_GetDesiredPosition())
+                if flDistance > flPathDist then
+                    pTarget:Set(self:NPC_GetDesiredPosition())
+                else
+                    pTarget:Set(self:NPC_ComputeClosestPoint(pTarget, flDistance, self:GetDesiredPosition())) 
+                end
+                break
+            end
+
+            -- Compute distance from the current target to the test path point
+            local flPathDist = pTarget:DistTo(pTravPath:GetPos())
+
+            if flPathDist <= flDistance then
+                flDistance = flDistance - flPathDist
+                pTarget:Set(pTravPath:GetPos())
+
+                -- Continue along the path
+                pTravPath = self:NPC_GetNextPath(pTravPath)
+            else
+                vecPathDir = self:NPC_ComputePathDirection(pTravPath) 
+                pTarget = self:NPC_ComputeClosestPoint(pTarget, flDistance, pTravPath:GetPos())
+                break
+            end
+        end
+    else
+        vecPathDir = (self.m_pCurrentPathTarget:GetPos() - self.m_vecSegmentStartPoint):GetNormalized()
+    end
+
+    -- Add the perpendicular distance
+    local pTarget = self:NPC_ComputePointFromPerpDistance(pTarget, vecPathDir, flPerpDist) 
+	return pTarget 
+end
+
+function ENT:NPC_ComputePathDistance(pPath, pDest, bForward) 
+	local flDist = 0 
+	local pLast = pPath 
+	local tblPath = self:NPC_GetPaths(pLast) 
+	
+	while IsValid(pPath) and tblPath[pPath] do 
+		if !IsValid(pPath) or tblPath[pPath] == false then 
+			return math.max 
+		end 
+		tblPath[pPath] = false 
+		flDist = flDist + pLast:GetPos():Distance(pPath:GetPos()) 
+		if pDest == pPath then 
+			return flDist 
+		end 
+		pLast = pPath 
+		pPath = bForward and self:NPC_GetNextPath(pPath) or self:NPC_GetPreviousPath(pPath) 
 	end 
 end 
 
+function ENT:NPC_IsForwardAlongPath(pPath, pPathTest) 
+	local flForwardDist = self:NPC_ComputePathDistance(pPath, pPathTest, true) 
+	local flReverseDist = self:NPC_ComputePathDistance(pPath, pPathTest, false) 
+	if flForwardDist == math.max and flReverseDist == math.max then return end 
+	return flForwardDist <= flReverseDist 
+end 
+
 function ENT:NPC_Flight(flInterval) 
+	self:SetSaveValue("m_bIsMoving",true) 
 	-- If on ground, set no ground entity
     if self:IsFlagSet(FL_ONGROUND) then self:SetGroundEntity(NULL) self:RemoveFlags(FL_ONGROUND) end 
     -- Determine the distances we must lie from the path
@@ -1144,7 +1226,7 @@ function ENT:NPC_ComputeLeadingPointAlongPath(vecStartPoint, pFirstTrack, flDist
             pTarget = pTravPath:GetPos()
 
             -- If there's no valid next path, return the current path node
-            if !IsValid(pNextPath) then
+            if !IsValid(pNextPath) then 
                 return bMovingForward and pTravPath or self:NPC_GetNextPath(pTravPath)
             end
         else
@@ -1169,47 +1251,32 @@ function ENT:NPC_ComputeDistanceAlongPathToPoint(pStartTrack, pDestTrack, vecDes
     local pTravPath = pStartTrack
     local pNextPath = NULL
     local pTestPath = NULL
-
-    -- Iterate over paths using self:NPC_GetPaths(pTravPath)
-    for pPath, _ in pairs(self:NPC_GetPaths(pTravPath)) do
-        pTestPath = pPath
-
-        -- If we have reached the destination path
-        if pTestPath == pDestTrack then
-            local vecDelta = vecDestPosition - vecPoint
+	
+	local tblPath = self:NPC_GetPaths(pTravPath) 
+	while IsValid(pTravPath) and tblPath[pTravPath] do 
+		tblPath[pTravPath] = false 
+		pNextPath = bMovingForward and self:NPC_GetNextPath(pTestPath) or self:NPC_GetPreviousPath(pTestPath) 
+		pTestPath = pTravPath 
+		if pTestPath == pDestTrack then 
+			local vecDelta = vecDestPosition - vecPoint
             local vecPathDelta = self:NPC_ComputePathDirection(pTestPath) 
 
             -- Calculate dot product to determine the direction and distance
             local flDot = vecDelta:Dot(vecPathDelta)
             flTotalDist = flTotalDist + (flDot > 0 and 1 or -1) * vecDelta:Length2D()
             break
-        end
-
-        -- Calculate the 2D distance between the current point and the test path's position
+		end 
+		 -- Calculate the 2D distance between the current point and the test path's position
         flTotalDist = flTotalDist + (bMovingForward and 1 or -1) * vecPoint:Distance(pTestPath:GetPos())
-        vecPoint = pTestPath:GetPos()
-
-        -- Determine the next path based on the direction of movement
-        pNextPath = bMovingForward and self:NPC_GetNextPath(pTestPath) or self:NPC_GetPreviousPath(pTestPath)
-
-        -- Mark the path as visited (to avoid potential looping issues)
-        -- if self:NPC_HasBeenVisited(pTestPath) then
-            -- break
-        -- end
-        -- self:NPC_VisitPath(pTestPath)
-
-        -- If no valid next path is available, exit
-        if !IsValid(pNextPath) then
-            break
-        end
-    end
+        vecPoint = pTestPath:GetPos() 
+	end 
 
     return flTotalDist
 end 
 
 function ENT:NPC_IsOnSameTrack(pPath1, pPath2) 
-	if !IsValid(pPath1) or !IsValid(pPath2) then return end 
-	for k,v in pairs(pPath1) do 
+	if !IsValid(pPath1) or !IsValid(pPath2) then return false end 
+	for k,v in pairs(self:NPC_GetPaths(pPath1)) do 
 		if k == pPath2 then return true end 
 	end 
 	return false 
@@ -1318,6 +1385,45 @@ function ENT:NPC_ComputePathDirection(pPath)
 		return Vector(1,0,0) 
 	end 
 	return pVecPathDir:GetNormalized() 
+end 
+
+function ENT:NPC_SetupNewCurrentTarget(pTrack) 
+	if !IsValid(pTrack) then return end 
+	self.m_vecSegmentStartPoint = self:EyePos() 
+	self.m_vecSegmentStartSplinePoint = self.m_vecSegmentStartPoint + (self:GetAbsVelocity() * -2) 
+	self:SetSaveValue("m_hGoalEnt",pTrack) 
+	self:NPC_SetDesiredPosition(pTrack:GetPos()) 
+end 
+
+function ENT:NPC_MoveToTrackPoint(pTrack) 
+	if !IsValid(pTrack) then return false end 
+	if self:NPC_IsOnSameTrack(pTrack, self:NPC_GetGoalTarget()) then 
+		self.m_pDestPathTarget = pTrack 
+		self.m_bMovingForward = self:NPC_IsForwardAlongPath(self:NPC_GetGoalTarget(), pTrack) 
+		self.m_bForcedMove = true 
+		return true 
+	else 
+		local pClosestTrack = self:NPC_BestPointOnPath( pTrack, self:WorldSpaceCenter(), 0, false, false) 
+		if !IsValid(pClosestTrack) then return false end 
+		self:NPC_SetupNewCurrentTarget(pClosestTrack) 
+		self.m_pDestPathTarget = pClosestTrack 
+		self:SetSaveValue("m_hGoalEnt",pClosestTrack) 
+		self.m_bMovingForward = true 
+		return true 
+	end 
+end 
+
+function ENT:NPC_MoveToClosestTrackPoint(pTrack) 
+	if self:NPC_IsOnSameTrack(pTrack, self:NPC_GetGoalTarget()) then return false end 
+	local pClosestTrack = self:NPC_BestPointOnPath( pTrack, self:WorldSpaceCenter(), 0, false, false) 
+	if !IsValid(pClosestTrack) then return false end 
+	self:NPC_SetupNewCurrentTarget(pClosestTrack) 
+	self.m_pDestPathTarget = pClosestTrack 
+	self:SetSaveValue("m_hGoalEnt",pClosestTrack) 
+	self.m_bMovingForward = true 
+	if self.m_bLeading then 
+		self.m_bForcedMove = true 
+	end 
 end 
 
 function ENT:NPC_ClosestPointToCurrentPath() 
@@ -1998,6 +2104,11 @@ end
 function ENT:SelectSchedule() end 
 function ENT:NPC_GetMaxRange1Dist() return self:GetInternalVariable("m_flDistTooFar") end 
 function ENT:NPC_ShouldDropBombs() return false end 
+function ENT:NPC_SetLeadingDistance(flDist) self.flLeadDistance = flDist or 0 end 
+function ENT:NPC_GetLeadingDistance(flDist) return self.flLeadDistance or 0 end 
+function ENT:NPC_SetDesiredPosition(m_vecDesiredPosition) self.m_vecDesiredPosition = m_vecDesiredPosition or self:GetPos() end 
+function ENT:NPC_GetDesiredPosition(flDist) return self.m_vecDesiredPosition or self:GetCurWaypointPos() end 
+function ENT:NPC_SetFarthestPathDist(flDist) self.m_flFarthestPathDist = flDist or 0 end 
 
 --[[ 
 function ENT:UApache_Think() 
