@@ -15,21 +15,6 @@ local function AddNPC( t, class )
 	list.Set( "NPC", class or t.Class, t ) 
 end 
 
-AddNPC( { 
-	Name = "Unreal Apache 2", 
-	Class = "npc_uapache_beta", 
-	Category = "Unreal Tournament", 
-	
-	-- Spawnflags used:
-	-- 2: Gag
-	-- 65536 : No Dynamic Light
-	-- 131072 : Strider Scout Scanner
-	
-	Model = model, 
-}, "Unreal Apache 2" ) 
-
--- unused right now 
-
 local model = Model("models/vehicles/ut99/unrealapachev3.mdl") 
 local flysound = Sound("^misc/ut99/apachesnd.wav") -- looping sound when apache starts 
 -- local flysound = Sound("NPC_UApache.FlySound") 
@@ -58,7 +43,21 @@ local	UAPACHE_FLY_CHASE	= 4		-- Fly quickly around the enviroment
 local	UAPACHE_FLY_SPOT	= 5		-- Fly above enity in spotlight position
 local	UAPACHE_FLY_ATTACK	= 6		-- Get in my enemies face for spray or flash
 local	UAPACHE_FLY_DIVE	= 7		-- Divebomb - only done when dead
-local	UAPACHE_FLY_FOLLOW	= 8		-- Following a target
+local	UAPACHE_FLY_FOLLOW	= 8		-- Following a target 
+
+AddNPC( { 
+	Name = "Unreal Apache 2", 
+	Class = "npc_uapache_beta", 
+	Category = "Unreal Tournament", 
+	
+	-- Spawnflags used:
+	-- 2: Gag
+	-- 65536 : No Dynamic Light
+	-- 131072 : Strider Scout Scanner
+	
+	Model = model, 
+}, "Unreal Apache 2" ) 
+
 
 ENT.bNewPath = false 
 ENT.m_bChooseFarthestPoint = false 
@@ -1598,7 +1597,7 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	vecImpulse.y = up.y * self.m_flForce 
 	vecImpulse.z = up.z * self.m_flForce 
 	vecImpulse.z = vecImpulse.z - 38.4 
-	self:SetAbsVelocity(vecImpulse) 
+	-- self:SetAbsVelocity(vecImpulse) 
 	local flSpeed = self:GetAbsVelocity():Length() 
 	local flDir = Vector( forward.x, forward.y, 0 ):Dot(Vector( self:GetAbsVelocity().x, self:GetAbsVelocity().y, 0 ) ) 
 	if (flDir < 0 ) then flSpeed = -flSpeed end 
@@ -1649,15 +1648,14 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	elseif (self:GetLocalAngles().x + angVel.x > 0) then 
 		angVel.x = angVel.x - 4.0 
 	end 
-
-	self:SetLocalAngularVelocity( angVel ) 
+	
+	return vecImpulse 
+	-- self:SetLocalAngularVelocity( angVel ) 
 end 
 --]] 
 
-
+-- HELICOPTER_DT is replaced with flInterval which returns last time a movement is performed 
 function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDistFromSegment, flMaxDistFromSegment, flInterval) 
-	local HELICOPTER_DT = flInterval 
-	
 	local deltaPos, pVecAccel = (vecTargetPosition - self:GetPos()), Vector(0,0,0)  
 	pVecAccel = 2 * (deltaPos - self:GetAbsVelocity()) 
 	pVecAccel.z = pVecAccel.z + HELICOPTER_GRAVITY -- HELICOPTER_GRAVITY 
@@ -1713,7 +1711,7 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	self.m_flForce = self.m_flForce * flForceBlend 
 	
 	-- Now add force based on our acceleration factors 
-	self.m_flForce = self.m_flForce + (( pVecAccel.z + flHorizLiftFactor ) * HELICOPTER_DT * (1 - flForceBlend)) 
+	self.m_flForce = self.m_flForce + (( pVecAccel.z + flHorizLiftFactor ) * flInterval * (1 - flForceBlend)) 
 	
 	-- The force is always *locally* upward based; we pitch + roll the chopper to get movement 
 	local vecImpulse = up * self.m_flForce 
@@ -1722,7 +1720,7 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	self:ApplySidewaysDrag( right ) 
 	self:ApplyGeneralDrag() 
 	if self:GetInternalVariable("m_lifeState") != 1 or (self:GetInternalVariable("m_lifeState") == 1 and IsValid(self:GetCrashPoint())) then 
-        vecImpulse.z = vecImpulse.z - HELICOPTER_GRAVITY * HELICOPTER_DT 
+        vecImpulse.z = vecImpulse.z - HELICOPTER_GRAVITY * flInterval 
         if flMinDistFromSegment != 0 and (flDistFromPath > flMinDistFromSegment) then 
             local vecVelDir = self:GetAbsVelocity()
             
@@ -1741,18 +1739,18 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
             end
         end
     else
-		vecImpulse.z = vecImpulse.z -HELICOPTER_GRAVITY * HELICOPTER_DT 
+		vecImpulse.z = vecImpulse.z -HELICOPTER_GRAVITY * flInterval 
 	end 
 	
-	vecImpulse.x = vecImpulse.x + pVecAccel.x * HELICOPTER_DT 
-	vecImpulse.y = vecImpulse.y + pVecAccel.y * HELICOPTER_DT 
+	vecImpulse.x = vecImpulse.x + pVecAccel.x * flInterval 
+	vecImpulse.y = vecImpulse.y + pVecAccel.y * flInterval 
 	vecImpulse.x = vecImpulse.x * 0.1 
 	vecImpulse.y = vecImpulse.y * 0.1 
 	return vecImpulse 
 end 
 
--- vecImpulse.x = vecImpulse.x + pVecAccel.x * HELICOPTER_DT 
--- vecImpulse.y = vecImpulse.y + pVecAccel.y * HELICOPTER_DT 
+-- vecImpulse.x = vecImpulse.x + pVecAccel.x * flInterval 
+-- vecImpulse.y = vecImpulse.y + pVecAccel.y * flInterval 
 
 function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection, flInterval ) 
 	local goalAngAccel = Angle() 
@@ -1814,11 +1812,69 @@ function ENT:ComputeAngularVelocity( vecGoalUp, vecFacingDirection, flInterval )
 
 	self:SetLocalAngularVelocity( angVel ) 
 
-	local flAmt = math.Clamp( angVel.y, -30, 30 ) 
-	local flRudderPose = math.Remap( flAmt, -30, 30, 45, -45 ) 
+	-- local flAmt = math.Clamp( angVel.y, -30, 30 ) 
+	-- local flRudderPose = math.Remap( flAmt, -30, 30, 45, -45 ) 
 	-- self:SetPoseParameter( "rudder", flRudderPose ) 
 	return angVel 
 end 
+
+--[[ 
+function ENT:ComputeAngularVelocity(vecGoalUp, vecFacingDirection, flInterval) 
+	local angVel = self:GetLocalAngularVelocity() 
+	local flSpeed = self:GetAbsVelocity():Length() 
+	local flDir = Vector( vecGoalUp.x, vecGoalUp.y, 0 ):Dot(Vector( self:GetAbsVelocity().x, self:GetAbsVelocity().y, 0 ) ) 
+	if (flDir < 0 ) then flSpeed = -flSpeed end 
+	local flDist = (self:NPC_GetDesiredPosition() - vecEst):Dot(vecGoalUp) 
+	local flSlip = -((self:NPC_GetDesiredPosition() - vecEst):Dot(right)) 
+	
+	if flSlip > 0 then
+		if self:GetLocalAngles().r > -30 and angVel.z > -15 then
+			angVel.z = angVel.z - 4
+		else
+			angVel.z = angVel.z + 2
+		end
+	else
+		if self:GetLocalAngles().r < 30 and angVel.z < 15 then
+			angVel.z = angVel.z + 4
+		else
+			angVel.z = angVel.z - 2
+		end
+	end 
+	self:ApplySidewaysDrag( right ) 
+	self:ApplyGeneralDrag() 
+	
+	local MAX_FORCE = 80	
+	local FORCE_POSDELTA = 12	
+	local FORCE_NEGDELTA = 8 
+	
+	if self.m_flForce < MAX_FORCE and vecEst.z < self:NPC_GetDesiredPosition().z then 
+		self.m_flForce = self.m_flForce + FORCE_POSDELTA 
+	elseif self.m_flForce > 30 then 
+		if (vecEst.z > self:NPC_GetDesiredPosition().z) then 
+			self.m_flForce = self.m_flForce - FORCE_NEGDELTA 
+		end 
+	end 
+	
+	-- pitch forward or back to get to target
+	-- -----------------------------------------
+	-- Pitch is reversed since Half-Life! (sjb)
+	-- -----------------------------------------
+	if flDist > 0 and flSpeed < maxSpeed and self:GetLocalAngles().x + angVel.x < 40 then 
+		-- lean forward
+		angVel.x = angVel.x + 12.0 
+		
+	elseif (flDist < 0 && flSpeed > -50 && self:GetLocalAngles().x + angVel.x  > -20) then 
+		-- lean backward
+		angVel.x = angVel.x - 12.0 
+	elseif (self:GetLocalAngles().x + angVel.x < 0) then 
+		angVel.x = angVel.x + 4.0 
+	elseif (self:GetLocalAngles().x + angVel.x > 0) then 
+		angVel.x = angVel.x - 4.0 
+	end 
+	
+	return angVel 
+end 
+--]] 
 
 function ENT:UpdateTrackNavigation() 
 	if !self.bLeading then 
@@ -1943,6 +1999,253 @@ function ENT:NPC_UpdateCurrentTarget()
 	::visualizeDebugInfo::	
 	self:VisualizeDebugInfo( vecPoint, vecTarget ) 
 end 
+
+function ENT:NPC_GetAvoidanceSpheres() 
+	-- create an empty table which will consist of vector = radius 
+	local retTbl = {} 
+	-- add npc_heli_avoidsphere positions and GetInternalVariable("m_flRadius") 
+	for k,v in pairs(ents.FindByClass("npc_heli_avoidsphere")) do 
+		retTbl[v:GetPos()] = v:GetInternalVariable("m_flRadius") 
+	end 
+	-- add danger sound positions and radius 
+	local tblSound = sound.GetLoudestSoundHint(SOUND_DANGER,self:EyePos()) -- sadly this does not support sound bits 
+	if tblSound then 
+		retTbl[tblSound.origin] = tblSound.volume 
+	end 
+	
+	for i = COND.HEAR_DANGER, COND.HEAR_SPOOKY do -- 50, 59 
+		if self:HasCondition(i) then -- only call if capable of hearing such sounds 
+			local tblSound = self:GetBestSoundHint(i) 
+			if tblSound then 
+				if i = COND.HEAR_DANGER then 
+					retTbl[tblSound.origin] = tblSound.volume 
+				else 
+					retTbl[tblSound.origin] = tblSound.volume*0.1 
+				end 
+			end 
+		end 
+	end 
+	
+	
+	-- add other sounds but with radius = radius * 0.1 
+	
+	-- return filled table 
+	return retTbl 
+end 
+
+function ENT:NPC_GetAvoidanceBoxes() 
+	-- create an empty table which will consist of vector = {vecMins, vecMaxs} 
+	-- add npc_heli_avoidbox positions and {OBBMins(), OBBMaxs()} 
+	-- add all npc locations with size of npc's {OBBMins() *1.5, OBBMaxs()*1.5} 
+	
+	-- return filled table 
+end 
+
+function ENT:NPC_ComputeAvoidanceForces(flEntityRadius, flAvoidTime) 
+    -- Initialize the avoidance force vector
+    local pVecAvoidForce = Vector(0, 0, 0) 
+
+    -- Get the entity's velocity and position
+    local vecEntityDelta = self:GetVelocity() * flAvoidTime
+    local vecEntityCenter = self:WorldSpaceCenter()
+
+    -- Get the list of avoidance spheres
+    local avoidanceSpheres = self:NPC_GetAvoidanceSpheres()
+
+    -- Iterate over each avoidance sphere
+    for vecAvoidCenter, flRadius in pairs(avoidanceSpheres) do
+        local flTotalRadius = flEntityRadius + flRadius
+        local t1, t2 = util.IntersectRayWithSphere(vecEntityCenter, vecEntityDelta, vecAvoidCenter, flTotalRadius) 
+
+        -- Check if the entity will intersect the avoidance sphere 
+		if !t1 then 
+            continue
+        end 
+		t2 = t2 and t2 or 0 
+
+        -- Find the point of closest approach
+        local flAverageT = (t1 + t2) * 0.5
+        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT
+
+        -- Calculate the direction vector from the sphere center to the closest approach point
+        local vecDir = vecClosestApproach - vecAvoidCenter
+        local flZDist = vecDir.z
+        local flDist = vecDir:Length()
+
+        -- Ensure distance and direction are normalized
+        local flDistToTravel
+        if flDist < 0.01 then
+            flDist = 0.01
+            vecDir = Vector(0, 0, 1)
+            flDistToTravel = flTotalRadius
+        else
+            vecDir = vecDir = vecDir:GetNormalized() 
+
+            -- make the chopper always avoid *above*
+			-- That means if a force would be applied to push the chopper down,
+			-- figure out a new distance to travel that would push the chopper up.
+			-- we ignore this field 
+			-- because we cannot returns spawnflags in NPC_GetAvoidanceSpheres() 
+			
+            -- if flZDist < 0.0 and !HasSpawnFlags(SF_AVOIDSPHERE_AVOID_BELOW) then
+            --     vecDir.z = -vecDir.z
+            --     local vecExitPoint = vecAvoidCenter + vecDir * flTotalRadius
+            --     vecDir = vecExitPoint - vecClosestApproach
+            --     flDistToTravel = vecDir:Length()
+            -- else
+            flDistToTravel = flTotalRadius - flDist
+            -- end
+        end
+
+        -- Clamp t1 to avoid large time steps
+        if t1 < 0.25 then
+            t1 = 0.25
+        end
+
+        -- Calculate the avoidance force
+        local flForce = 1.25 * flDistToTravel / t1
+        vecDir = vecDir * flForce
+
+        -- Add the calculated force to the total avoidance force
+        pVecAvoidForce = pVecAvoidForce + vecDir
+    end
+
+    -- Return the total avoidance force
+    return pVecAvoidForce
+end 
+
+local function IntersectInfiniteRayWithSphere(vecRayOrigin, vecRayDelta, vecSphereCenter, flRadius)
+    -- Initialize the intersection times
+    local t1, t2
+
+    -- Compute the vector from the sphere center to the ray origin
+    local vecSphereToRay = vecRayOrigin - vecSphereCenter
+
+    -- Calculate the quadratic coefficients a, b, and c
+    local a = vecRayDelta:Dot(vecRayDelta)
+
+    -- If the ray has zero length, return early
+    if a == 0.0 then
+        t1, t2 = 0.0, 0.0
+        return vecSphereToRay:LengthSqr() <= flRadius * flRadius, t1, t2
+    end
+
+    local b = 2 * vecSphereToRay:Dot(vecRayDelta)
+    local c = vecSphereToRay:Dot(vecSphereToRay) - flRadius * flRadius
+    local flDiscrim = b * b - 4 * a * c
+
+    -- If the discriminant is negative, no intersection
+    if flDiscrim < 0.0 then
+        return false, t1, t2
+    end
+
+    -- Calculate the square root of the discriminant
+    flDiscrim = math.sqrt(flDiscrim)
+
+    -- Solve for the two intersection times t1 and t2
+    local oo2a = 0.5 / a
+    t1 = (-b - flDiscrim) * oo2a
+    t2 = (-b + flDiscrim) * oo2a
+
+    return true, t1, t2
+end
+
+function ENT:NPC_ComputeAvoidanceForcesForBoxes(flEntityRadius, flAvoidTime)
+    -- Initialize the avoidance force vector
+    local pVecAvoidForce = Vector(0, 0, 0)
+
+    -- Get the entity's velocity and position
+    local vecEntityDelta = self:GetVelocity() * flAvoidTime
+    local vecEntityCenter = self:WorldSpaceCenter()
+    local vecEntityEnd = vecEntityCenter + vecEntityDelta
+
+    -- Normalize velocity direction
+    local vecVelDir = self:GetVelocity():GetNormalized() 
+
+    -- Get the list of avoidance boxes
+    local avoidBoxes = self:NPC_GetAvoidBoxes()
+
+    -- Iterate over each avoid box
+    for vecAvoidCenter, boxBounds in pairs(avoidBoxes) do
+        local boxMins = boxBounds[1]
+        local boxMaxs = boxBounds[2]
+
+        local flTotalRadius = flEntityRadius + math.max(boxMaxs.x - boxMins.x, boxMaxs.y - boxMins.y, boxMaxs.z - boxMins.z) / 2
+        local t1, t2
+
+        -- Check if the entity will intersect the avoidance box (similar to sphere intersection)
+		local bIntersect, t1, t2 = IntersectInfiniteRayWithSphere(vecEntityCenter, vecEntityDelta, vecAvoidCenter, flTotalRadius, t1, t2) 
+        if !bIntersect then
+            continue
+        end
+
+        if t2 < 0.0 or t1 > 1.0 then
+            continue
+        end
+
+        -- Transform the entity's position and direction into the box's local space using WorldToLocal
+        local localCenter = WorldToLocal(vecEntityCenter, Angle(0,0,0), vecAvoidCenter, Angle(0,0,0))
+        local localDelta = WorldToLocal(vecEntityDelta, Angle(0,0,0), vecAvoidCenter, Angle(0,0,0))
+
+        -- Adjust the box's bounds based on the entity radius
+        local vecBoxMin = boxMins - Vector(flEntityRadius, flEntityRadius, flEntityRadius)
+        local vecBoxMax = boxMaxs + Vector(flEntityRadius, flEntityRadius, flEntityRadius)
+
+        local hitPos, hitNormal, hitFraction = util.IntersectRayWithOBB(vecEntityCenter, vecEntityDelta, vecAvoidCenter, Angle(0, 0, 0), boxMins, boxMaxs)
+        if !hitPos then
+            continue
+        end
+
+        -- Closest point of approach between the entity's path and the box
+        local flAverageT = (t1 + t2) * 0.5
+        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT
+
+        -- Compute the force direction and limit sideways motion
+        local vecDir = (vecClosestApproach - vecAvoidCenter)
+        -- if (tr.plane.type != 3) or (tr.plane.normal[2] > 0.0) then
+        if (tr.plane.type != 3) or (hitNormal[2] > 0.0) then
+			vecDir.x = vecDir.x * 0.1
+			vecDir.y = vecDir.y * 0.1
+        end
+
+        local flZDist = vecDir.z
+        local flDist = vecDir:Length()
+        local flDistToTravel
+
+        -- Handle distances and apply avoidance above the box
+        if flDist < 10.0 then
+            flDist = 10.0
+            vecDir = Vector(0, 0, 1)
+            flDistToTravel = flTotalRadius
+        else
+            -- Commented out code for avoiding below the box as requested
+            -- if flZDist < 0.0 and not pBox:HasSpawnFlags(SF_AVOIDSPHERE_AVOID_BELOW) then
+            --     vecDir.z = -vecDir.z
+            --     local vecExitPoint = vecAvoidCenter + vecDir * flTotalRadius
+            --     vecDir = vecExitPoint - vecClosestApproach
+            --     flDistToTravel = vecDir:Length()
+            -- else
+            flDistToTravel = flTotalRadius - flDist
+            -- end
+        end
+
+        -- Clamp t1 to avoid large time steps
+        if t1 < 0.25 then
+            t1 = 0.25
+        end
+
+        -- Calculate the avoidance force
+        local flForce = 1.5 * flDistToTravel / t1
+        vecDir = vecDir * flForce
+
+        -- Add the calculated force to the total avoidance force
+        pVecAvoidForce = pVecAvoidForce + vecDir
+    end
+
+    -- Return the total avoidance force
+    return pVecAvoidForce
+end 
+
 
 function ENT:GetTrackPatherTarget() 
 	local enemy = self:GetEnemy() 
