@@ -304,7 +304,7 @@ function ENT:Initialize()
 		self:SetCollisionGroup(COLLISION_GROUP_VEHICLE) 
 		self:SetMoveCollide(MOVECOLLIDE_FLY_CUSTOM) 
 				-- booleans to enable/disable features below
-		self.projectile_dodge_enabled = true 
+		self.projectile_dodge_enabled = false 
 		self.enemy_aim_dodge_enabled = true 
 		self.warhead_enabled = true 
 		self.rockets_enabled = true 
@@ -342,6 +342,7 @@ function ENT:Initialize()
 		if IsValid(phys) then 
 				phys:SetMass(400) 
 		end 
+		--[[ 
 		self.aisound = ents.Create("ai_sound") -- alert non combine selfs that we're here
 		self.aisound:SetPos(self:GetPos()) 
 		self.aisound:SetKeyValue("volume", 9999) 
@@ -354,6 +355,7 @@ function ENT:Initialize()
 		self.aisound:Spawn() 
 		self:DeleteOnRemove(self.aisound) 
 		self.aisound.pingnow = CurTime() 
+		--]] 
 		if self.rotorwash_enabled then 
 			self.rotorwash = ents.Create("env_rotorwash_emitter") 
 			self.rotorwash:SetPos(self:GetPos()) 
@@ -361,7 +363,7 @@ function ENT:Initialize()
 			self.rotorwash:SetOwner(self) 
 			self.rotorwash:SetKeyValue("altitude", 500) 
 			self.rotorwash:Spawn() 
-			self:DeleteOnRemove(self.aisound) 
+			self:DeleteOnRemove(self.rotorwash) 
 		end 
 	end
 	if CLIENT then 
@@ -416,7 +418,7 @@ function ENT:UApache_Think()
 	if !IsValid(self) then return end
 	-- UApache_CheckifClear(self)
 	self:SetSaveValue("speed", 500)
-	if IsValid(self.aisound) and self.aisound.pingnow < CurTime() then self.aisound:Fire("emitaisound") self.aisound.pingnow = CurTime() + 10 end
+	-- if IsValid(self.aisound) and self.aisound.pingnow < CurTime() then self.aisound:Fire("emitaisound") self.aisound.pingnow = CurTime() + 10 end
 	-- self:UApache_PathFind()	-- Pathfinding on maps without air nodes
 	if self.projectile_dodge_enabled then self:UApache_DecideShouldDodge() end
 	-- self:UApache_FixGoingUpwards()
@@ -933,6 +935,36 @@ end
 
 function ENT:NPC_ComputeDistanceToLeadingPosition() 
 	return self:NPC_ComputeDistanceAlongPathToPoint( self:NPC_GetGoalTarget(), self.m_pDestPathTarget, self:NPC_GetDesiredPosition(), self.m_bMovingForward )
+end 
+
+function ENT:NPC_ComputeDistanceToTargetPosition() 
+	if !IsValid(self.m_pTargetNearestPath) then return end 
+	local pDest = self.m_bMovingForward and self.m_pTargetNearestPath or self:NPC_GetPreviousPath(self.m_pTargetNearestPath) 
+	if !IsValid(pDest) then pDest = self.m_pTargetNearestPath end 
+	local bMovingForward = self:NPC_IsForwardAlongPath( self:NPC_GetGoalTarget(), pDest ) 
+	local pStart = self:NPC_GetGoalTarget() 
+	if bMovingForward != self.m_bMovingForward then 
+		if bMovingForward then 
+			local pNext = self:NPC_GetNextPath(pStart) 
+			local pDest2 = self:NPC_GetNextPath(pDest) 
+			if IsValid(pNext) then 
+				pStart = pNext 
+			end 
+			if IsValid(pDest) then 
+				pDest = pDest2 
+			end 
+		else 
+			local pNext = self:NPC_GetPreviousPath(pStart) 
+			local pDest2 = self:NPC_GetPreviousPath(pDest) 
+			if IsValid(pNext) then 
+				pStart = pNext 
+			end 
+			if IsValid(pDest) then 
+				pDest = pDest2 
+			end 
+		end 
+	end 
+	return self:NPC_ComputeDistanceAlongPathToPoint(pStart, pDest, self.m_vecTargetPathPoint, bMovingForward) 
 end 
 
 function ENT:NPC_ComputePointAlongCurrentPath(flDistance, flPerpDist) 
@@ -1685,6 +1717,11 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 		
 	end 
 	
+	local vecAvoidForce = self:NPC_ComputeAvoidanceSpheres(350,2) 
+	print("vecAvoidForce",vecAvoidForce) 
+	pVecAccel = pVecAccel + vecAvoidForce 
+	-- vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(350,2) 
+	-- pVecAccel = pVecAccel + vecAvoidForce 
 	-- if ( !HasSpawnFlags( SF_HELICOPTER_IGNORE_AVOID_FORCES ) )
 	-- {
 		-- Vector vecAvoidForce;
@@ -2008,19 +2045,34 @@ function ENT:NPC_GetAvoidanceSpheres()
 		retTbl[v:GetPos()] = v:GetInternalVariable("m_flRadius") 
 	end 
 	-- add danger sound positions and radius 
-	local tblSound = sound.GetLoudestSoundHint(SOUND_DANGER,self:EyePos()) -- sadly this does not support sound bits 
-	if tblSound then 
-		retTbl[tblSound.origin] = tblSound.volume 
-	end 
+	-- local tblSound = sound.GetLoudestSoundHint(SOUND_DANGER,self:EyePos()) -- sadly this does not support sound bits 
+	-- if tblSound then 
+		-- retTbl[tblSound.origin] = tblSound.volume 
+	-- end 
 	
 	for i = COND.HEAR_DANGER, COND.HEAR_SPOOKY do -- 50, 59 
 		if self:HasCondition(i) then -- only call if capable of hearing such sounds 
 			local tblSound = self:GetBestSoundHint(i) 
 			if tblSound then 
-				if i = COND.HEAR_DANGER then 
-					retTbl[tblSound.origin] = tblSound.volume 
+				local sndOrigin = tblSound.origin 
+				print(sndOrigin == self:WorldSpaceCenter()) 
+				if sndOrigin == self:WorldSpaceCenter() then 
+					-- treat this as owner's direction 
+					if tblSound.owner and IsValid(tblSound.owner) then 
+						local dir = tblSound.owner:EyePos() 
+						dir = (dir - self:EyePos()):GetNormalized() 
+						dir = dir * self:BoundingRadius() 
+						sndOrigin = sndOrigin + dir 
+					else 
+						local dir = self:GetVelocity()*(-self:GetInternalVariable("m_flPrevAnimTime")) 
+						sndOrigin = dir 
+						-- sndOrigin 
+					end 
+				end 
+				if i == COND.HEAR_DANGER then 
+					retTbl[sndOrigin] = tblSound.volume 
 				else 
-					retTbl[tblSound.origin] = tblSound.volume*0.1 
+					retTbl[sndOrigin] = tblSound.volume*0.1 
 				end 
 			end 
 		end 
@@ -2034,14 +2086,25 @@ function ENT:NPC_GetAvoidanceSpheres()
 end 
 
 function ENT:NPC_GetAvoidanceBoxes() 
-	-- create an empty table which will consist of vector = {vecMins, vecMaxs} 
-	-- add npc_heli_avoidbox positions and {OBBMins(), OBBMaxs()} 
+	local retTbl = {} -- create an empty table which will consist of vector = {vecMins, vecMaxs} 
+	-- add npc_heli_avoidbox positions and {OBBMins(), OBBMaxs())  
+	for k,v in pairs(ents.FindByClass("npc_heli_avoidbox")) do 
+		retTbl[v:GetPos()] = {v:OBBMins(), v:OBBMaxs()} 
+	end 
 	-- add all npc locations with size of npc's {OBBMins() *1.5, OBBMaxs()*1.5} 
 	
+	for k,v in ents.Iterator() do 
+		if v != self and (IsValid(v):GetParent() and v:GetParent() != v) and v:IsSolid() then 
+		-- if v:IsNPC() or v:IsPlayer() or v:IsNextBot() then 
+			retTbl[v:GetPos()] = {v:OBBMins()*1.5, v:OBBMaxs()*1.5} 
+		end 
+	end 
+	
 	-- return filled table 
+	return retTbl 
 end 
 
-function ENT:NPC_ComputeAvoidanceForces(flEntityRadius, flAvoidTime) 
+function ENT:NPC_ComputeAvoidanceSpheres(flEntityRadius, flAvoidTime) 
     -- Initialize the avoidance force vector
     local pVecAvoidForce = Vector(0, 0, 0) 
 
@@ -2079,7 +2142,7 @@ function ENT:NPC_ComputeAvoidanceForces(flEntityRadius, flAvoidTime)
             vecDir = Vector(0, 0, 1)
             flDistToTravel = flTotalRadius
         else
-            vecDir = vecDir = vecDir:GetNormalized() 
+            vecDir = vecDir:GetNormalized() 
 
             -- make the chopper always avoid *above*
 			-- That means if a force would be applied to push the chopper down,
@@ -2150,7 +2213,7 @@ local function IntersectInfiniteRayWithSphere(vecRayOrigin, vecRayDelta, vecSphe
     return true, t1, t2
 end
 
-function ENT:NPC_ComputeAvoidanceForcesForBoxes(flEntityRadius, flAvoidTime)
+function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
     -- Initialize the avoidance force vector
     local pVecAvoidForce = Vector(0, 0, 0)
 
@@ -2163,7 +2226,7 @@ function ENT:NPC_ComputeAvoidanceForcesForBoxes(flEntityRadius, flAvoidTime)
     local vecVelDir = self:GetVelocity():GetNormalized() 
 
     -- Get the list of avoidance boxes
-    local avoidBoxes = self:NPC_GetAvoidBoxes()
+    local avoidBoxes = self:NPC_GetAvoidanceBoxes()
 
     -- Iterate over each avoid box
     for vecAvoidCenter, boxBounds in pairs(avoidBoxes) do
@@ -2203,7 +2266,7 @@ function ENT:NPC_ComputeAvoidanceForcesForBoxes(flEntityRadius, flAvoidTime)
         -- Compute the force direction and limit sideways motion
         local vecDir = (vecClosestApproach - vecAvoidCenter)
         -- if (tr.plane.type != 3) or (tr.plane.normal[2] > 0.0) then
-        if (tr.plane.type != 3) or (hitNormal[2] > 0.0) then
+        if (hitNormal[2] > 0.0) then
 			vecDir.x = vecDir.x * 0.1
 			vecDir.y = vecDir.y * 0.1
         end
@@ -2393,6 +2456,10 @@ function ENT:NPC_FlyToPathTrack(path)
 	end 
 	print(self,  "Could not find path_track", path) 
 	return false 
+end 
+
+function ENT:GetSoundInterests() 
+	return SOUND_WORLD + SOUND_COMBAT + SOUND_PLAYER + SOUND_PLAYER_VEHICLE + SOUND_DANGER + SOUND_PHYSICS_DANGER + SOUND_BULLET_IMPACT + SOUND_MOVE_AWAY 
 end 
 
 function ENT:OnRemove() if self.rotorsound then self.rotorsound:Stop() self.rotorsound = nil end end 
