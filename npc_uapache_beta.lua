@@ -1718,9 +1718,11 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	end 
 	
 	local vecAvoidForce = self:NPC_ComputeAvoidanceSpheres(350,2) 
-	print("vecAvoidForce",vecAvoidForce) 
+	print("vecAvoidSphere",vecAvoidForce) 
 	pVecAccel = pVecAccel + vecAvoidForce 
-	-- vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(350,2) 
+	vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(350,2) 
+	print("vecAvoidBoxes",vecAvoidForce) 
+	pVecAccel = pVecAccel + vecAvoidForce 
 	-- pVecAccel = pVecAccel + vecAvoidForce 
 	-- if ( !HasSpawnFlags( SF_HELICOPTER_IGNORE_AVOID_FORCES ) )
 	-- {
@@ -2055,7 +2057,6 @@ function ENT:NPC_GetAvoidanceSpheres()
 			local tblSound = self:GetBestSoundHint(i) 
 			if tblSound then 
 				local sndOrigin = tblSound.origin 
-				print(sndOrigin == self:WorldSpaceCenter()) 
 				if sndOrigin == self:WorldSpaceCenter() then 
 					-- treat this as owner's direction 
 					if tblSound.owner and IsValid(tblSound.owner) then 
@@ -2094,9 +2095,9 @@ function ENT:NPC_GetAvoidanceBoxes()
 	-- add all npc locations with size of npc's {OBBMins() *1.5, OBBMaxs()*1.5} 
 	
 	for k,v in ents.Iterator() do 
-		if v != self and (IsValid(v):GetParent() and v:GetParent() != v) and v:IsSolid() then 
+		if v != self and (!IsValid(v:GetParent()) or IsValid(v:GetParent()) and v:GetParent() != v) and (!IsValid(v:GetOwner()) or IsValid(v:GetOwner()) and v:GetOwner() != v) and v:IsSolid() and !v:IsWeapon() then 
 		-- if v:IsNPC() or v:IsPlayer() or v:IsNextBot() then 
-			retTbl[v:GetPos()] = {v:OBBMins()*1.5, v:OBBMaxs()*1.5} 
+			retTbl[v:GetPos()] = {v:OBBMins()*2, v:OBBMaxs()*2} 
 		end 
 	end 
 	
@@ -2213,32 +2214,29 @@ local function IntersectInfiniteRayWithSphere(vecRayOrigin, vecRayDelta, vecSphe
     return true, t1, t2
 end
 
-function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
-    -- Initialize the avoidance force vector
-    local pVecAvoidForce = Vector(0, 0, 0)
+function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime) 
+	local maxspeed, maxaccel = self:NPC_GetMaxSpeedAndAccel() 
+    local pVecAvoidForce = Vector(0, 0, 0) 
 
-    -- Get the entity's velocity and position
+    -- Get entity's velocity and position
     local vecEntityDelta = self:GetVelocity() * flAvoidTime
     local vecEntityCenter = self:WorldSpaceCenter()
-    local vecEntityEnd = vecEntityCenter + vecEntityDelta
 
-    -- Normalize velocity direction
     local vecVelDir = self:GetVelocity():GetNormalized() 
 
-    -- Get the list of avoidance boxes
-    local avoidBoxes = self:NPC_GetAvoidanceBoxes()
+    local avoidBoxes = self:NPC_GetAvoidanceBoxes() 
 
     -- Iterate over each avoid box
     for vecAvoidCenter, boxBounds in pairs(avoidBoxes) do
         local boxMins = boxBounds[1]
         local boxMaxs = boxBounds[2]
 
-        local flTotalRadius = flEntityRadius + math.max(boxMaxs.x - boxMins.x, boxMaxs.y - boxMins.y, boxMaxs.z - boxMins.z) / 2
-        local t1, t2
+        -- Adjusted radius calculation
+        local flTotalRadius = flEntityRadius + math.max(boxMaxs.x - boxMins.x, boxMaxs.y - boxMins.y, boxMaxs.z - boxMins.z) / 2 
 
-        -- Check if the entity will intersect the avoidance box (similar to sphere intersection)
-		local bIntersect, t1, t2 = IntersectInfiniteRayWithSphere(vecEntityCenter, vecEntityDelta, vecAvoidCenter, flTotalRadius, t1, t2) 
-        if !bIntersect then
+        -- Intersect sphere to check if we should avoid
+        local bIntersect, t1, t2 = IntersectInfiniteRayWithSphere(vecEntityCenter, vecEntityDelta, vecAvoidCenter, flTotalRadius) 
+        if not bIntersect then 
             continue
         end
 
@@ -2254,60 +2252,60 @@ function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
         local vecBoxMin = boxMins - Vector(flEntityRadius, flEntityRadius, flEntityRadius)
         local vecBoxMax = boxMaxs + Vector(flEntityRadius, flEntityRadius, flEntityRadius)
 
-        local hitPos, hitNormal, hitFraction = util.IntersectRayWithOBB(vecEntityCenter, vecEntityDelta, vecAvoidCenter, Angle(0, 0, 0), boxMins, boxMaxs)
-        if !hitPos then
+        local hitPos, hitNormal, hitFraction = util.IntersectRayWithOBB(vecEntityCenter, vecEntityDelta, vecAvoidCenter, Angle(0, 0, 0), boxMins, boxMaxs) 
+        if not hitPos then
             continue
         end
 
-        -- Closest point of approach between the entity's path and the box
+        -- Closest point of approach
         local flAverageT = (t1 + t2) * 0.5
-        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT
+        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT 
 
-        -- Compute the force direction and limit sideways motion
-        local vecDir = (vecClosestApproach - vecAvoidCenter)
-        -- if (tr.plane.type != 3) or (tr.plane.normal[2] > 0.0) then
-        if (hitNormal[2] > 0.0) then
-			vecDir.x = vecDir.x * 0.1
-			vecDir.y = vecDir.y * 0.1
+        -- Calculate direction to avoid
+        local vecDir = (vecClosestApproach - vecAvoidCenter) 
+        
+        -- Optional sideways motion limiting (simplified without trace plane info)
+        if hitNormal and hitNormal[1] > 0.0 then
+            vecDir.x = vecDir.x * 0.1
+            vecDir.y = vecDir.y * 0.1
         end
 
         local flZDist = vecDir.z
-        local flDist = vecDir:Length()
+        local flDist = vecDir:Length() 
         local flDistToTravel
 
-        -- Handle distances and apply avoidance above the box
+        -- Avoid distances that are too small
         if flDist < 10.0 then
             flDist = 10.0
-            vecDir = Vector(0, 0, 1)
+            -- vecDir = Vector(0, 0, 1)
             flDistToTravel = flTotalRadius
         else
-            -- Commented out code for avoiding below the box as requested
-            -- if flZDist < 0.0 and not pBox:HasSpawnFlags(SF_AVOIDSPHERE_AVOID_BELOW) then
-            --     vecDir.z = -vecDir.z
-            --     local vecExitPoint = vecAvoidCenter + vecDir * flTotalRadius
-            --     vecDir = vecExitPoint - vecClosestApproach
-            --     flDistToTravel = vecDir:Length()
-            -- else
             flDistToTravel = flTotalRadius - flDist
-            -- end
         end
 
-        -- Clamp t1 to avoid large time steps
+        -- Clamp t1 for more reasonable force calculation
         if t1 < 0.25 then
             t1 = 0.25
         end
 
-        -- Calculate the avoidance force
-        local flForce = 1.5 * flDistToTravel / t1
-        vecDir = vecDir * flForce
+        -- Limit flDistToTravel to avoid large forces
+        flDistToTravel = math.min(flDistToTravel, self:BoundingRadius()*3)  -- Limit the max distance to travel 
 
-        -- Add the calculated force to the total avoidance force
+        -- Calculate avoidance force
+        local flForce = 1.5 * flDistToTravel / t1
+
+        -- Cap maximum force to avoid extreme values
+        flForce = math.min(flForce, maxspeed*50)  -- Set a reasonable cap for maximum force 
+
+        -- Apply force direction
+        vecDir = vecDir:GetNormalized() * flForce
+
+        -- Add to total avoidance force
         pVecAvoidForce = pVecAvoidForce + vecDir
     end
 
-    -- Return the total avoidance force
     return pVecAvoidForce
-end 
+end
 
 
 function ENT:GetTrackPatherTarget() 
