@@ -334,6 +334,7 @@ function ENT:Initialize()
 		self.m_flRandomOffsetTime = 0 
 		self.m_vecRandomOffset = Vector() 
 		self.m_vecDesiredPosition = self:EyePos() 
+		self.m_vecTargetPosition = self:EyePos() 
 		self.attacker = self 
 		self.inflictor = self 
 		self:SetNWBool("hassmoketrail",false) 
@@ -410,9 +411,22 @@ function ENT:StartTouch(ent)
 	end 
 end 
 
-function ENT:EndTouch(ent) self:SetLocalVelocity(self.tempVelocity) end 
+function ENT:Touch(ent) 
+	if ent:IsSolid() then 
+		local tr = self:GetTouchTrace() 
+		local dmg = DamageInfo() 
+		dmg:SetDamage(math.max(self.m_flForce,1)) 
+		dmg:SetAttacker(self) 
+		dmg:SetInflictor(IsValid(self:GetActiveWeapon()) and self:GetActiveWeapon() or self) 
+		dmg:SetReportedPosition(tr.HitPos) 
+		dmg:SetDamagePosition(tr.HitPos) 
+		dmg:SetDamageForce(self.tempVelocity) 
+		dmg:SetDamageType(DMG_VEHICLE)
+		ent:TakePhysicsDamage(dmg) 
+	end 
+end 
 
-function ENT:GetCrashPoint() return NULL end 
+function ENT:EndTouch(ent) self:SetLocalVelocity(self.tempVelocity) end 
 
 function ENT:UApache_Think() 
 	if !IsValid(self) then return end
@@ -458,7 +472,7 @@ function ENT:UApache_Think()
 		if IsValid(self) and !self.projfired then 
 			self:UApache_RangeAttack() 
 		end 
-	end) 	
+	end) 
 end 
 
 function ENT:NPC_GetEnemyVehicle(enemy) 
@@ -1044,6 +1058,47 @@ function ENT:NPC_IsForwardAlongPath(pPath, pPathTest)
 	return flForwardDist <= flReverseDist 
 end 
 
+function ENT:NPC_FlightDirectlyOverhead(flInterval) 
+    local vecTargetPosition = self.m_vecTargetPosition 
+    local pEnemy = self:GetEnemy() 
+
+    if IsValid(pEnemy) and self:Visible(pEnemy) then 
+            if IsValid(pEnemy) then
+                local vecEnemyVel = (pEnemy:GetPhysicsObject():IsValid() and pEnemy:GetPhysicsObject():GetVelocity()) or pEnemy:GetVelocity() 
+                local vecRelativePosition = self:GetPos() - pEnemy:GetPos()
+                local flDist = vecRelativePosition:Length() 
+                local flEnemySpeed = vecEnemyVel:Length() 
+                local flDot = vecRelativePosition:Dot(vecEnemyVel)
+                local flSpeed = self:NPC_GetMaxSpeedAndAccel() * 0.3
+
+                local a = flSpeed * flSpeed - flEnemySpeed * flEnemySpeed
+                local b = 2.0 * flEnemySpeed * flDist * flDot
+                local c = -(flDist * flDist)
+
+                local flDiscrim = b * b - 4 * a * c
+                if flDiscrim >= 0 then
+                    local t = (-b + math.sqrt(flDiscrim)) / (2 * a)
+                    t = math.Clamp(t, 0.0, 4.0)
+                    vecTargetPosition = pEnemy:GetPos() + (vecEnemyVel * t * flEnemySpeed)
+                end
+            end
+        end
+
+    -- Uncomment if you need the current path target position's Z to match
+    -- if self.GetCurrentPathTargetPosition then
+    --     vecTargetPosition.z = self:GetCurrentPathTargetPosition().z
+    -- end
+
+    -- debugoverlay.Cross(vecTargetPosition, 32, 0.1, Color(0, 0, 255))
+
+    self:UpdateFacingDirection(vecTargetPosition)
+
+    local accel = self:NPC_ComputeVelocity(vecTargetPosition, 0.0, 0.0, 0.0, flInterval) 
+    self:SetVelocity(accel) 
+    local angVel = self:ComputeAngularVelocity(accel, self.m_vecDesiredFaceDir, flInterval) 
+	self:UpdateDesiredPosition() 
+end
+
 function ENT:NPC_Flight(flInterval) 
 	self:SetSaveValue("m_bIsMoving",true) 
 	-- If on ground, set no ground entity
@@ -1572,20 +1627,7 @@ function ENT:RunEngineTask(taskid,data,cFromLua)
 end 
 
 function ENT:Innate_Range_Attack1() 
-	local rocket1attachment = self:GetAttachment(1) 
-	local rocket2attachment = self:GetAttachment(2) 
-		
-	local proj1 = ents.Create("uatracer") 
-	proj1:SetPos(rocket1attachment.Pos) 
-	proj1:SetAngles(self:GetAimVector():Angle()) 
-	proj1:SetOwner(self) 
-	proj1:Spawn() 
-		
-	local proj2 = ents.Create("uatracer") 
-	proj2:SetPos(rocket2attachment.Pos) 
-	proj2:SetAngles(self:GetAimVector():Angle()) 
-	proj2:SetOwner(self) 
-	proj2:Spawn() 
+	if !self.projfired then self:UApache_RangeAttack() end 
 end 
 
 --[[ 
@@ -1717,12 +1759,16 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 		
 	end 
 	
-	local vecAvoidForce = self:NPC_ComputeAvoidanceSpheres(350,2) 
-	print("vecAvoidSphere",vecAvoidForce) 
-	pVecAccel = pVecAccel + vecAvoidForce 
-	vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(350,2) 
-	print("vecAvoidBoxes",vecAvoidForce) 
-	pVecAccel = pVecAccel + vecAvoidForce 
+	local bCalcAvoidForces = true 
+	
+	if bCalcAvoidForces then 
+		local vecAvoidForce = self:NPC_ComputeAvoidanceSpheres(500,2) 
+		print("vecAvoidSphere",vecAvoidForce) 
+		pVecAccel = pVecAccel + vecAvoidForce 
+		vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(500,2) 
+		print("vecAvoidBoxes",vecAvoidForce) 
+		pVecAccel = pVecAccel + vecAvoidForce 
+	end 
 	-- pVecAccel = pVecAccel + vecAvoidForce 
 	-- if ( !HasSpawnFlags( SF_HELICOPTER_IGNORE_AVOID_FORCES ) )
 	-- {
@@ -2079,9 +2125,25 @@ function ENT:NPC_GetAvoidanceSpheres()
 		end 
 	end 
 	
+	if self:GetCurrentSchedule() == SCHED_INVESTIGATE_SOUND then return retTbl end 
+	local tableofignoreents = { self } 
 	
-	-- add other sounds but with radius = radius * 0.1 
+	if (self:GetNPCState() == 2 or self:GetNPCState() == 3) and !self:IsGoalActive() then 
+		for k,v in ents.Iterator() do 
+			if !v:IsSolid() then 
+				table.insert(tableofignoreents,self) 
+			else 
+			
+			end 
+		end 
+		
+		local tr = util.QuickTrace(self:EyePos(),self:GetAimVector()*1000,tableofignoreents) 
 	
+		if tr.Hit then 
+			retTbl[tr.HitPos] = self:BoundingRadius()*4 
+		end 
+		
+	end 
 	-- return filled table 
 	return retTbl 
 end 
@@ -2097,7 +2159,7 @@ function ENT:NPC_GetAvoidanceBoxes()
 	for k,v in ents.Iterator() do 
 		if v != self and (!IsValid(v:GetParent()) or IsValid(v:GetParent()) and v:GetParent() != v) and (!IsValid(v:GetOwner()) or IsValid(v:GetOwner()) and v:GetOwner() != v) and v:IsSolid() and !v:IsWeapon() then 
 		-- if v:IsNPC() or v:IsPlayer() or v:IsNextBot() then 
-			retTbl[v:GetPos()] = {v:OBBMins()*2, v:OBBMaxs()*2} 
+			retTbl[v:GetPos()] = {v:GetRotatedAABB(v:OBBMins()*2, v:OBBMaxs()*2)} 
 		end 
 	end 
 	
@@ -2106,12 +2168,17 @@ function ENT:NPC_GetAvoidanceBoxes()
 end 
 
 function ENT:NPC_ComputeAvoidanceSpheres(flEntityRadius, flAvoidTime) 
+	local debug_spheres = false 
     -- Initialize the avoidance force vector
     local pVecAvoidForce = Vector(0, 0, 0) 
 
     -- Get the entity's velocity and position
     local vecEntityDelta = self:GetVelocity() * flAvoidTime
-    local vecEntityCenter = self:WorldSpaceCenter()
+    local vecEntityCenter = self:WorldSpaceCenter() 
+	-- Debug: Draw axis at the entity's center 
+	if debug_spheres then 
+		debugoverlay.Axis(vecEntityCenter, Angle(0, 0, 0), 10, 0.1 , true) 
+	end 
 
     -- Get the list of avoidance spheres
     local avoidanceSpheres = self:NPC_GetAvoidanceSpheres()
@@ -2126,10 +2193,16 @@ function ENT:NPC_ComputeAvoidanceSpheres(flEntityRadius, flAvoidTime)
             continue
         end 
 		t2 = t2 and t2 or 0 
+		if debug_spheres then 
+			debugoverlay.Sphere(vecAvoidCenter, flRadius, 0.1, Color(255, 0, 0, 150))  -- Red sphere for avoidance 
+		end 
 
         -- Find the point of closest approach
         local flAverageT = (t1 + t2) * 0.5
-        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT
+        local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT 
+		if debug_spheres then 
+			debugoverlay.Cross(vecClosestApproach, 5, 0.1, Color(0, 255, 0))  -- Green cross for closest approach
+		end 
 
         -- Calculate the direction vector from the sphere center to the closest approach point
         local vecDir = vecClosestApproach - vecAvoidCenter
@@ -2168,13 +2241,18 @@ function ENT:NPC_ComputeAvoidanceSpheres(flEntityRadius, flAvoidTime)
 
         -- Calculate the avoidance force
         local flForce = 1.25 * flDistToTravel / t1
-        vecDir = vecDir * flForce
-
+        vecDir = vecDir * flForce 
+		if debug_spheres then 
+			debugoverlay.Line(vecEntityCenter, vecEntityCenter + vecDir, 0.1, Color(255, 255, 0))  -- Yellow line for avoidance force
+		end 
         -- Add the calculated force to the total avoidance force
         pVecAvoidForce = pVecAvoidForce + vecDir
     end
 
-    -- Return the total avoidance force
+    -- Return the total avoidance force 
+	if debug_spheres then 
+		debugoverlay.Line(vecEntityCenter, vecEntityCenter + pVecAvoidForce, 0.1, Color(255, 0, 255))  -- Purple line for total avoidance force 
+	end 
     return pVecAvoidForce
 end 
 
@@ -2215,12 +2293,17 @@ local function IntersectInfiniteRayWithSphere(vecRayOrigin, vecRayDelta, vecSphe
 end
 
 function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime) 
+	local debug_boxes = false 
 	local maxspeed, maxaccel = self:NPC_GetMaxSpeedAndAccel() 
     local pVecAvoidForce = Vector(0, 0, 0) 
 
     -- Get entity's velocity and position
     local vecEntityDelta = self:GetVelocity() * flAvoidTime
-    local vecEntityCenter = self:WorldSpaceCenter()
+    local vecEntityCenter = self:WorldSpaceCenter() 
+	-- Debug: Draw axis at entity's center 
+	if debug_boxes then 
+		debugoverlay.Axis(vecEntityCenter, Angle(0, 0, 0), 10, 0.1, true) 
+	end 
 
     local vecVelDir = self:GetVelocity():GetNormalized() 
 
@@ -2242,7 +2325,13 @@ function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
 
         if t2 < 0.0 or t1 > 1.0 then
             continue
-        end
+        end 
+		
+		-- Debug: Draw the avoidance box in 3D space 
+		if debug_boxes then 
+			debugoverlay.Box(vecAvoidCenter, boxMins, boxMaxs, 0.1, Color(255, 0, 0, 150))  -- Red box for avoidance 
+		end 
+
 
         -- Transform the entity's position and direction into the box's local space using WorldToLocal
         local localCenter = WorldToLocal(vecEntityCenter, Angle(0,0,0), vecAvoidCenter, Angle(0,0,0))
@@ -2253,13 +2342,24 @@ function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
         local vecBoxMax = boxMaxs + Vector(flEntityRadius, flEntityRadius, flEntityRadius)
 
         local hitPos, hitNormal, hitFraction = util.IntersectRayWithOBB(vecEntityCenter, vecEntityDelta, vecAvoidCenter, Angle(0, 0, 0), boxMins, boxMaxs) 
-        if not hitPos then
+        if !hitPos then
             continue
-        end
+        end 
+		
+		      -- Debug: Draw hit position with a cross
+		if debug_boxes then 
+			debugoverlay.Cross(hitPos, 5, 0.1, Color(0, 255, 0))  -- Green cross for hit point
+		end 
+
 
         -- Closest point of approach
         local flAverageT = (t1 + t2) * 0.5
         local vecClosestApproach = vecEntityCenter + vecEntityDelta * flAverageT 
+		-- Debug: Draw the closest approach point 
+		if debug_boxes then 
+			debugoverlay.Cross(vecClosestApproach, 5, 0.1, Color(0, 0, 255))  -- Blue cross for closest approach
+		end 
+
 
         -- Calculate direction to avoid
         local vecDir = (vecClosestApproach - vecAvoidCenter) 
@@ -2302,11 +2402,22 @@ function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
 
         -- Add to total avoidance force
         pVecAvoidForce = pVecAvoidForce + vecDir
-    end
+    end 
+	if debug_boxes then 
+		-- Debug: Draw the total avoidance force vector
+		debugoverlay.Line(vecEntityCenter, vecEntityCenter + pVecAvoidForce, 0.1, Color(255, 0, 255))  -- Purple line for total avoidance force 
+	end 
 
-    return pVecAvoidForce
-end
+    return pVecAvoidForce 
+end 
 
+function ENT:OnCondition(i) 
+	if self:GetNPCState() == 1 then 
+		if i >= 50 and i <= 59 and self:NPC_OccupyStrategySlot(2) then 
+			self:SetSchedule(SCHED_INVESTIGATE_SOUND) 
+		end 
+	end 
+end 
 
 function ENT:GetTrackPatherTarget() 
 	local enemy = self:GetEnemy() 
@@ -2344,7 +2455,7 @@ function ENT:UpdateDesiredPosition()
 			-- print("distance is higher") 
 			-- print("t:",t) 
 		-- end 
-		print("vecPoint:DistToSqr( curwaypoint )", vecPoint:DistToSqr( curwaypoint )) 
+		-- print("vecPoint:DistToSqr( curwaypoint )", vecPoint:DistToSqr( curwaypoint )) 
 		
 		if self:IsGoalActive() then 
 			local dist = self:GetCurWaypointPos():Distance(self:GetPos()) 
@@ -2460,6 +2571,65 @@ function ENT:GetSoundInterests()
 	return SOUND_WORLD + SOUND_COMBAT + SOUND_PLAYER + SOUND_PLAYER_VEHICLE + SOUND_DANGER + SOUND_PHYSICS_DANGER + SOUND_BULLET_IMPACT + SOUND_MOVE_AWAY 
 end 
 
+-- SQUAD SLOT FUNCTIONS 
+-- OccupyStrategySlot: enters in a strategy slot only if it's available. 
+-- true if success 
+-- false if can't enter 
+function ENT:NPC_OccupyStrategySlot(squadSlotID) return self:NPC_OccupyStrategySlotRange( squadSlotID, squadSlotID ) == squadSlotID end 
+function ENT:NPC_OccupyStrategySlotRange(slotIDStart,slotIDEnd) 
+	local slots = self:NPC_IsStrategySlotRangeOccupied(slotIDStart,slotIDEnd) 
+	if slots == true then return false 
+	elseif isnumber(slots) then 
+		self:SetSaveValue("m_iMySquadSlot",slots) 
+		return slots 
+	elseif istable(slots) then 
+		self:SetSaveValue("m_iMySquadSlot",slots[1]) 
+		return slots[1] 
+	end 
+	
+end 
+
+-- IsStrategySlotRangeOccupied 
+-- returns the first slot that isn't occupied, 
+-- returns a table if multiple slots aren't occupied 
+-- returns true if all slots are occupied 
+
+function ENT:NPC_IsStrategySlotRangeOccupied(slotIDStart,slotIDEnd) 
+	if slotIDEnd > slotIDStart then return true end 
+	local m_iMySquadSlot = self:GetInternalVariable("m_iMySquadSlot") 
+	local squadName = self:GetSquad() 
+	if !squadName or squadName and #squadName == 0 then return {slotIDStart, slotIDEnd} end 
+	-- iterate over each ID 
+	local lasttest = true 
+	for i = slotIDStart,slotIDEnd do 
+	
+		if m_iMySquadSlot == i then return self:NPC_IsStrategySlotRangeOccupied(i + 1,slotIDEnd) end 
+		for k,v in pairs(ai.GetSquadMembers(self:GetSquad())) do 
+			if IsValid(v) then 
+				local theirsaveslot = v:GetInternalVariable("m_iMySquadSlot") 
+				if theirsaveslot == i then return self:NPC_IsStrategySlotRangeOccupied(i + 1,slotIDEnd) end 
+			end 
+		end 
+		-- i is free, save it before iteration restarts 
+		if lasttest == true then 
+			lasttest = i 
+		elseif isnumber(lasttest) then 
+			lasttest = {i} 
+		elseif istable(lasttest) then 
+			table.insert(lasttest,i) 
+		end 
+	end 
+	return lasttest 
+	-- return false 
+end 
+
+function ENT:NPC_VacateStrategySlot() self:SetSaveValue("m_iMySquadSlot",-1) end 
+function ENT:NPC_HasStrategySlot(squadSlotID) return self:GetInternalVariable("m_iMySquadSlot") == squadSlotID end 
+function ENT:NPC_HasStrategySlotRange(slotIDStart, slotIDEnd) 
+	local m_iMySquadSlot = self:GetInternalVariable("m_iMySquadSlot") 
+	if m_iMySquadSlot < slotIDStart or m_iMySquadSlot > slotIDEnd then return false else return true end 
+end 
+
 function ENT:OnRemove() if self.rotorsound then self.rotorsound:Stop() self.rotorsound = nil end end 
 function ENT:GetTrackPatherTargetEnt() return self:GetEnemy() end 
 function ENT:IsCrashing() return false end 
@@ -2477,6 +2647,7 @@ function ENT:NPC_GetLeadingDistance(flDist) return self.flLeadDistance or 0 end
 function ENT:NPC_SetDesiredPosition(m_vecDesiredPosition) self.m_vecDesiredPosition = m_vecDesiredPosition or self:GetPos() end 
 function ENT:NPC_GetDesiredPosition(flDist) return self.m_vecDesiredPosition or self:GetCurWaypointPos() end 
 function ENT:NPC_SetFarthestPathDist(flDist) self.m_flFarthestPathDist = flDist or 0 end 
+function ENT:GetCrashPoint() return NULL end 
 
 --[[ 
 function ENT:UApache_Think() 
