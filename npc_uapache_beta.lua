@@ -1763,10 +1763,8 @@ function ENT:NPC_ComputeVelocity(vecTargetPosition, flAdditionalHeight, flMinDis
 	
 	if bCalcAvoidForces then 
 		local vecAvoidForce = self:NPC_ComputeAvoidanceSpheres(500,2) 
-		print("vecAvoidSphere",vecAvoidForce) 
 		pVecAccel = pVecAccel + vecAvoidForce 
 		vecAvoidForce = self:NPC_ComputeAvoidanceBoxes(500,2) 
-		print("vecAvoidBoxes",vecAvoidForce) 
 		pVecAccel = pVecAccel + vecAvoidForce 
 	end 
 	-- pVecAccel = pVecAccel + vecAvoidForce 
