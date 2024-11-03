@@ -82,6 +82,8 @@ ENT.UApache_Far_Dist = 300
 ENT.UApache_Attack_Range = 350 
 ENT.UApache_Max_Speed = 500 
 ENT.UApache_Squad_Fly_Dist	= 500 
+ENT.flThresholdRepeatedDamage = 0.3 
+ENT.flThresholdHeavyDamage = 20 
 
 ENT.Pitch_Modifier = 0 
 ENT.PhysicsSolidMask = MASK_SOLID + CONTENTS_HITBOX 
@@ -338,6 +340,7 @@ function ENT:Initialize()
 		self.attacker = self 
 		self.inflictor = self 
 		self:SetNWBool("hassmoketrail",false) 
+		self:SetNWBool("alive",true) 
 		self:SetSaveValue("m_flDistTooFar",16384) 
 		local phys = self:GetPhysicsObject() 
 		if IsValid(phys) then 
@@ -386,7 +389,22 @@ end
 
 function ENT:Think( ) 
 	if CLIENT then 
-		if self.rotorsound then self.rotorsound:ChangePitch(self:CalcDoppler()+self.Pitch_Modifier) end 
+		if self.rotorsound then 
+			if self:GetNWBool("alive") == false then 
+				if self.rotorsound then self.rotorsound:Stop() end 
+				if self.alarmsound then self.alarmsound:Stop() end 
+			else 
+				if (self:GetNWBool("hassmoketrail") == true ) and !self.alarmsound then 
+					self.alarmsound = CreateSound(self, flyalarmsound) 
+					self.alarmsound:Play() 
+				end 
+				-- print(self.rotorsound:IsPlaying()) 
+				self.rotorsound:ChangePitch(self:CalcDoppler()+self.Pitch_Modifier) 
+				if self.alarmsound then 
+					self.alarmsound:ChangePitch(self.rotorsound:GetPitch()) 
+				end 
+			end 
+		end 
 		return 
 	end 
 	self:UApache_Think( ) 
@@ -435,9 +453,7 @@ function ENT:UApache_Think()
 	-- if IsValid(self.aisound) and self.aisound.pingnow < CurTime() then self.aisound:Fire("emitaisound") self.aisound.pingnow = CurTime() + 10 end
 	-- self:UApache_PathFind()	-- Pathfinding on maps without air nodes
 	if self.projectile_dodge_enabled then self:UApache_DecideShouldDodge() end
-	-- self:UApache_FixGoingUpwards()
-	
-	if !self.smoke_trail_entity then self:UApache_FindSmokeTrail() end
+	-- self:UApache_FixGoingUpwards() 
 	
 	--[[ 
 	local tr = util.QuickTrace(
@@ -547,33 +563,11 @@ function ENT:UApache_RangeAttack()
 	timer.Simple(0.16, function () self.projfired = false end) 
 end 
 
-function ENT:UApache_FindSmokeTrail()
-	for k,v in pairs(ents.FindByClass("env_smoketrail")) do
-		if v:GetParent() == self then
-			self.smoke_trail_entity = v
-			self.smoke_trail_entity:SetKeyValue("opacity",1)
-			self.smoke_trail_entity:SetKeyValue("maxspeed",100)
-			self.smoke_trail_entity:SetKeyValue("endsize",500)
-			self.smoke_trail_entity:SetKeyValue("lifetime",5)
-			self:SetNWBool("hassmoketrail", true)
-		end
-	end
-end 
-
-function ENT:UApache_Die() 
-	if SERVER then 
-		for k,v in pairs(ents.FindByClass("ai_hint")) do -- cleanup hint nodes used during pathfinding 
-			if v:GetName() == self:EntIndex()..'_uapache_hint' then 
-				SafeRemoveEntity(v) -- cleanup hint nodes 
-			end 
-		end 
-		if self:Health() < 1 then -- always shockwave explode on death 
-			local exp = ents.Create("unrealapacheshockwave") 
-			exp:SetPos(self:GetPos()) 
-			exp:SetOwner(self) 
-			exp:Spawn() 
-		end 
-	end 
+function ENT:Explode() 
+	local exp = ents.Create("unrealapacheshockwave") 
+	exp:SetPos(self:GetPos()) 
+	exp:SetOwner(self) 
+	exp:Spawn() 
 	if CLIENT then if self.rotorsound then self.rotorsound:Stop() end if self.alarmsound then self.alarmsound:Stop() end end 
 end 
 
@@ -2409,6 +2403,124 @@ function ENT:NPC_ComputeAvoidanceBoxes(flEntityRadius, flAvoidTime)
     return pVecAvoidForce 
 end 
 
+function ENT:OnTakeDamage_ScaleDamage(dmginfo) 
+-- you can customize damage input here 
+end 
+
+function ENT:OnTakeDamage_Accumulator(info) 
+	-- Separate the fractional amount of damage from the whole 
+	local m_flDamageAccumulator = self:GetSaveTable().m_flDamageAccumulator 
+	local flFractionalDamage = info:GetDamage() - math.floor( info:GetDamage() ) 
+	local flIntegerDamage = info:GetDamage() - flFractionalDamage 
+ 
+	-- Add fractional damage to the accumulator 
+	m_flDamageAccumulator = m_flDamageAccumulator + flFractionalDamage 
+	self:SetSaveValue("m_flDamageAccumulator",m_flDamageAccumulator) 
+
+	-- If the accumulator is holding a full point of damage, move that point 
+	-- of damage into the damage we're about to inflict. 
+	if m_flDamageAccumulator >= 1.0  then  
+		flIntegerDamage = flIntegerDamage + 1.0 
+		m_flDamageAccumulator = m_flDamageAccumulator - 1.0 
+		self:SetSaveValue("m_flDamageAccumulator",m_flDamageAccumulator) 
+	end 
+	if  flIntegerDamage <= 0 then 
+		return 0 
+	end 
+	return flIntegerDamage  
+end 
+
+function ENT:OnTakeDamage_Base(dmginfo)
+	local m_takedamage = self:GetSaveTable().m_takedamage 
+	if m_takedamage <= 0 then return end 
+	self:OnTakeDamage_ScaleDamage(dmginfo) 
+	
+	-- following lines have been commented out 
+	-- due to recent changes in OnTakeDamage hook 
+	-- undo: default damage hook has been removed 
+	
+	if dmginfo:GetDamage() >= 0 then self:SetCondition(17) end --COND_LIGHT_DAMAGE 
+	if dmginfo:GetDamage() >= self.flThresholdHeavyDamage then self:SetCondition(18) end --COND_HEAVY_DAMAGE 
+	local dmgcount = self:GetSaveTable().m_iDamageCount
+	local sumdamage = self:GetSaveTable().m_flSumDamage 
+	self:SetSaveValue("m_iDamageCount",dmgcount + 1) 
+	if self:GetSaveTable().m_flLastDamageTime > -1 then sumdamage = sumdamage + dmginfo:GetDamage() else sumdamage = dmginfo:GetDamage() end 
+	self:SetSaveValue("m_flSumDamage",sumdamage) 
+	self:SetSaveValue("m_flLastDamageTime",0) 
+	if IsValid(dmginfo:GetAttacker()) and dmginfo:GetAttacker():IsPlayer() then self:SetSaveValue("m_flLastPlayerDamageTime",0) end 
+	if sumdamage > self:GetMaxHealth()*self.flThresholdRepeatedDamage then self:SetCondition(20) end -- COND_REPEATED_DAMAGE, damaged several times in a row 
+	--------------------------------------------------------------- 
+	--  Insert a combat sound so that nearby NPCs know I've been hit 
+	--------------------------------------------------------------- 
+	sound.EmitHint(SOUND_COMBAT,dmginfo:GetDamagePosition(),1024,0.5,self) 
+	
+	if m_takedamage >= 2 then 
+		local dmg = self:OnTakeDamage_Accumulator(dmginfo) -- if dmg is lesser than 1, accumulate it over a float counter 
+		dmg = self:Health() - dmg  
+		self:SetHealth(dmg) 
+		local id = self:EntIndex() 
+		BroadcastLua("Entity("..id..").GetHealth = "..self:Health().."") 
+		-- BroadcastLua("print("..self:Health()..")") 
+	end 
+end 
+
+function ENT:OnKilled(dmginfo) 
+	self:SetSaveValue("m_takedamage",0) 
+	if self:GetNPCState() != NPC_STATE_DEAD then GAMEMODE:OnNPCKilled(self, self.attacker, self.inflictor) end  -- call on collisions 
+	self:Explode() 
+	if IsValid(dmginfo:GetAttacker()) then 
+		dmginfo:GetAttacker():Fire("KilledNPC","",0.3,self,self)
+		if isfunction(dmginfo:GetAttacker().SetCondition) then 
+			dmginfo:GetAttacker():SetCondition(30) 
+		end 
+	end 
+	if IsValid(self.rotorwash) then SafeRemoveEntity(self.rotorwash) end 
+	if IsValid(self.smoke_trail_entity) then SafeRemoveEntity(self.smoke_trail_entity) end 
+	self:SetPreventTransmit(player.GetAll(),true) 
+	SafeRemoveEntityDelayed(self,2) 
+	self:SetNPCState(7) -- ded 
+	self:SetSaveValue("m_bDidDeathCleanup", true) 
+	self:SetNWBool("alive",false) 
+end 
+
+function ENT:OnTakeDamage(dmginfo) 
+	local m_takedamage = self:GetSaveTable().m_takedamage 
+	if m_takedamage <= 0 then return end 
+	self:OnTakeDamage_Base(dmginfo) 
+	if self:Health() <= 0 then 
+	-- if dmginfo:GetDamage() >= self:Health() then 
+		self.attacker = dmginfo:GetAttacker() 
+		self.inflictor = dmginfo:GetInflictor() 
+		self:SetSaveValue("m_takedamage",0) -- this will be set by default death action instead 
+		self:OnKilled(dmginfo) 
+	else
+		self:OnTakeDamage_Alive(dmginfo) --this is where your ai will respond to dmg 
+	end 
+	return dmginfo:GetDamage() -- for now, until the default damage action is back 
+end 
+
+function ENT:OnTakeDamage_Alive(dmginfo) 
+	if !IsValid(dmginfo:GetAttacker()) then return end 
+	if self.MarkTookDamageFromEnemy then self:MarkTookDamageFromEnemy(dmginfo:GetAttacker()) end 
+	if self:NPC_ShouldCreateSmoke() then 
+		self.smoke_trail_entity = ents.Create("env_smoketrail") 
+		self.smoke_trail_entity:SetKeyValue("opacity",1) 
+		self.smoke_trail_entity:SetKeyValue("maxspeed",100) 
+		self.smoke_trail_entity:SetKeyValue("endsize",500) 
+		self.smoke_trail_entity:SetKeyValue("lifetime",5) 
+		self.smoke_trail_entity:SetKeyValue("spawnrate",10) 
+		self.smoke_trail_entity:SetKeyValue("minspeed",15) 
+		self.smoke_trail_entity:SetKeyValue("maxspeed",25) 
+		self.smoke_trail_entity:SetPos(self:WorldSpaceCenter()) 
+		self.smoke_trail_entity:SetParent(self) 
+		self.smoke_trail_entity:Spawn() 
+		self:SetNWBool("hassmoketrail", true) 
+	end 
+
+end 
+
+function ENT:NPC_ShouldCreateSmoke() return self:Health() < ( self:GetMaxHealth() - ( self:GetMaxHealth() / 4 ) ) end 
+
 function ENT:OnCondition(i) 
 	if self:GetNPCState() == 1 then 
 		if i >= 50 and i <= 59 and self:NPC_OccupyStrategySlot(2) then 
@@ -2628,7 +2740,7 @@ function ENT:NPC_HasStrategySlotRange(slotIDStart, slotIDEnd)
 	if m_iMySquadSlot < slotIDStart or m_iMySquadSlot > slotIDEnd then return false else return true end 
 end 
 
-function ENT:OnRemove() if self.rotorsound then self.rotorsound:Stop() self.rotorsound = nil end end 
+function ENT:OnRemove() if self.rotorsound then self.rotorsound:Stop() self.rotorsound = nil end if self.alarmsound then self.alarmsound:Stop() end end 
 function ENT:GetTrackPatherTargetEnt() return self:GetEnemy() end 
 function ENT:IsCrashing() return false end 
 function ENT:RunAI() 
