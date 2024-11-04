@@ -1,5 +1,3 @@
--- m_vecSegmentStartPoint will be previous path (when AdvancePath() is called, it will be around GetPos()) 
--- m_vecSegmentStartSplinePoint will be GetCurWaypointPos() 
 AddCSLuaFile() 
 
 ENT.Base			= "base_ai" 
@@ -343,9 +341,7 @@ function ENT:Initialize()
 		self:SetNWBool("alive",true) 
 		self:SetSaveValue("m_flDistTooFar",16384) 
 		local phys = self:GetPhysicsObject() 
-		if IsValid(phys) then 
-				phys:SetMass(400) 
-		end 
+		if IsValid(phys) then phys:SetMass(400) end 
 		--[[ 
 		self.aisound = ents.Create("ai_sound") -- alert non combine selfs that we're here
 		self.aisound:SetPos(self:GetPos()) 
@@ -398,7 +394,7 @@ function ENT:Think( )
 					self.alarmsound = CreateSound(self, flyalarmsound) 
 					self.alarmsound:Play() 
 				end 
-				-- print(self.rotorsound:IsPlaying()) 
+				if !self.rotorsound:IsPlaying() then self.rotorsound:Play() end 
 				self.rotorsound:ChangePitch(self:CalcDoppler()+self.Pitch_Modifier) 
 				if self.alarmsound then 
 					self.alarmsound:ChangePitch(self.rotorsound:GetPitch()) 
@@ -486,7 +482,7 @@ function ENT:UApache_Think()
 	timer.Simple(1, function()
 		-- todo: use arbitrary aimpos if there's no enemy
 		if IsValid(self) and !self.projfired then 
-			self:UApache_RangeAttack() 
+			self:Innate_Range_Attack1() 
 		end 
 	end) 
 end 
@@ -1621,7 +1617,7 @@ function ENT:RunEngineTask(taskid,data,cFromLua)
 end 
 
 function ENT:Innate_Range_Attack1() 
-	if !self.projfired then self:UApache_RangeAttack() end 
+	if !self.projfired and self:GetInternalVariable("m_lifeState") == 0 then self:UApache_RangeAttack() end 
 end 
 
 --[[ 
@@ -2475,8 +2471,10 @@ function ENT:OnKilled(dmginfo)
 		end 
 	end 
 	if IsValid(self.rotorwash) then SafeRemoveEntity(self.rotorwash) end 
-	if IsValid(self.smoke_trail_entity) then SafeRemoveEntity(self.smoke_trail_entity) end 
+	if IsValid(self.smoke_trail_entity) then self.smoke_trail_entity:SetParent() SafeRemoveEntity(self.smoke_trail_entity) end 
 	self:SetPreventTransmit(player.GetAll(),true) 
+	self:SetNoDraw(true) 
+	self:SetColor(Color(0,0,0,0)) 
 	SafeRemoveEntityDelayed(self,2) 
 	self:SetNPCState(7) -- ded 
 	self:SetSaveValue("m_bDidDeathCleanup", true) 
